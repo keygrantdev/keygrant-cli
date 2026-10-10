@@ -9,7 +9,7 @@ import { login, logout } from './commands/auth.js'
 import { products, release, testLicense } from './commands/catalog.js'
 import { pubkey, verify } from './commands/keys.js'
 import { checkout, get, list } from './commands/licenses-read.js'
-import { deviceLimit, extend, freeDevice, issue, revoke, versions } from './commands/licenses-write.js'
+import { deviceLimit, extend, freeDevice, issue, revoke, seatRelease, versions } from './commands/licenses-write.js'
 
 /** Every command, in the order the help lists them. */
 export const COMMANDS: readonly Command[] = [
@@ -23,6 +23,7 @@ export const COMMANDS: readonly Command[] = [
   extend,
   versions,
   deviceLimit,
+  seatRelease,
   revoke,
   freeDevice,
   testLicense,

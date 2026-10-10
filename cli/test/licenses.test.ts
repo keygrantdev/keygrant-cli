@@ -11,7 +11,7 @@ describe('licenses issue', () => {
     const h = harness({ answers: [{ status: 201, body: { key: KEY, emailed: false } }] })
     const res = await h.run(
       'licenses', 'issue', '--product', 'sluice', '--model', 'mod_annual', '--email', 'jo@example.com',
-      '--device-limit', '5', '--expires', '2027-01-31', '--version', '2.4.1', '--min-major', '2', '--max-major', 'none',
+      '--device-limit', '5', '--seat-release-days', '30', '--expires', '2027-01-31', '--version', '2.4.1', '--min-major', '2', '--max-major', 'none',
       '--upgrade-months', '12', '--entitlement', 'edition=pro', '--entitlement', 'seats=5', '--entitlement', 'beta=true',
       '--send-email',
     )
@@ -26,6 +26,7 @@ describe('licenses issue', () => {
           modelId: 'mod_annual',
           email: 'jo@example.com',
           deviceLimit: 5,
+          seatReleaseDays: 30,
           expiresAt: Date.UTC(2027, 0, 31, 23, 59, 59, 999),
           version: '2.4.1',
           minMajor: 2,
@@ -45,9 +46,9 @@ describe('licenses issue', () => {
 
   it('issues a bare type, none of the model\'s entitlements, several keys, and the idempotency key asked for', async () => {
     const h = harness({ answers: [{ status: 201, body: { key: 'K-1', keys: ['K-1', 'K-2'], emailed: true } }] })
-    const res = await h.run('licenses', 'issue', '--product', 'sluice', '--type', 'perpetual', '--no-entitlements', '--count', '2', '--idempotency-key', 'order-9')
+    const res = await h.run('licenses', 'issue', '--product', 'sluice', '--type', 'perpetual', '--no-entitlements', '--seat-release-days', 'Off', '--count', '2', '--idempotency-key', 'order-9')
     expect(res).toEqual({ code: EXIT.ok, out: 'K-1\nK-2', err: 'Emailed the keys to the customer.' })
-    expect(h.calls[0]?.body).toEqual({ product: 'sluice', model: 'perpetual', entitlements: {}, count: 2 })
+    expect(h.calls[0]?.body).toEqual({ product: 'sluice', model: 'perpetual', entitlements: {}, seatReleaseDays: null, count: 2 })
     expect(h.calls[0]?.headers['idempotency-key']).toBe('order-9')
   })
 
@@ -67,6 +68,8 @@ describe('licenses issue', () => {
       [['--product', 'sluice', '--type', 'perpetual', '--entitlement', 'pro'], '--entitlement takes code=value, not "pro"'],
       [['--product', 'sluice', '--type', 'perpetual', '--entitlement', 'a=1', '--no-entitlements'], '--entitlement and --no-entitlements cannot be given together'],
       [['--product', 'sluice', '--type', 'perpetual', '--count', '101'], '--count must be from 1 to 100'],
+      [['--product', 'sluice', '--type', 'perpetual', '--seat-release-days', '0'], '--seat-release-days must be from 1 to 365'],
+      [['--product', 'sluice', '--type', 'perpetual', '--seat-release-days', 'never'], '--seat-release-days must be a whole number of days or off, not "never"'],
       [['--product', 'sluice', '--type', 'perpetual', 'extra'], 'unexpected argument "extra"'],
       [['--product', 'sluice', '--type', 'perpetual', '--model', 'mod_annual'], 'give one of --model and --type, not both'],
       [['--product', 'sluice', '--type', 'perpetual', '--entitlement', 'edition=pro', '--entitlement', 'edition=basic'], '--entitlement edition is given twice'],
@@ -150,7 +153,8 @@ describe('licenses issue', () => {
 
 describe('reading licenses', () => {
   it('shows one license, a field per line', async () => {
-    const h = harness({ answers: [{ status: 200, body: { license: license({ revokedReason: 'subscription_canceled', revokedAt: NOW, sale: { id: 'sale_1', index: 2, size: 5 } }) } }] })
+    const shown = license({ revokedReason: 'subscription_canceled', revokedAt: NOW, sale: { id: 'sale_1', index: 2, size: 5 }, seatReleaseDays: 30 })
+    const h = harness({ answers: [{ status: 200, body: { license: shown } }] })
     const res = await h.run('licenses', 'get', KEY)
     expect(h.calls[0]).toMatchObject({ method: 'GET', url: `${BASE}/v1/licenses/${KEY}` })
     expect(res.out).toBe(
@@ -162,7 +166,10 @@ describe('reading licenses', () => {
         'Email         jo@example.com',
         'Expires       2026-10-01 14:13 UTC',
         'Valid until   2026-10-04 14:13 UTC',
+        'Grace         3 days',
         'Devices       1 of 3 active',
+        'Unused seats  freed after 30 days unseen',
+        "Offline days  7 days (its type's default)",
         'Versions      1 and later',
         'Entitlements  edition=pro',
         'Sale          key 2 of 5 (sale_1)',
@@ -192,6 +199,25 @@ describe('reading licenses', () => {
     expect((await harness({ answers: [{ status: 200, body: { license: open } }] }).run('licenses', 'get', KEY)).out).toContain(
       'Versions      2 to 3; every major from 2 up until 2026-09-22 14:13 UTC',
     )
+  })
+
+  it('shows unused seats kept, a key\'s own offline days or its type\'s, and no grace; and none of the three from a KeyGrant that does not say', async () => {
+    const shown = async (fields: Record<string, unknown>, drop: string[] = []) => {
+      const answered = license(fields)
+      for (const name of drop) delete answered[name]
+      return (await harness({ answers: [{ status: 200, body: { license: answered } }] }).run('licenses', 'get', KEY)).out
+    }
+    const own = await shown({ seatReleaseDays: null, leaseDays: 1, graceDays: 0, validUntil: NOW + 10 * DAY })
+    expect(own).toContain('Unused seats  kept')
+    expect(own).toContain('Offline days  1 day\n')
+    expect(own).toContain('Grace         none')
+    expect(await shown({ seatReleaseDays: 1 })).toContain('Unused seats  freed after 1 day unseen')
+    for (const [model, days] of [['perpetual', 30], ['subscription', 7], ['trial', 7], ['timed', 7], ['lifetime', 30]] as const) {
+      expect(await shown({ model, leaseDays: null }), model).toContain(`Offline days  ${days} days (its type's default)`)
+    }
+    const older = await shown({}, ['leaseDays', 'graceDays', 'seatReleaseDays'])
+    expect(older).not.toMatch(/^(Grace|Unused seats|Offline days) /m)
+    expect(older).toContain('Devices       1 of 3 active')
   })
 
   it('puts a key typed with odd characters into the path safely', async () => {
@@ -327,6 +353,52 @@ describe('changing a license', () => {
     expect(h.calls[0]).toMatchObject({ method: 'POST', path: `/v1/licenses/${KEY}/devices`, body: { deviceLimit: 5 } })
     expect(res.out).toContain('Devices       1 of 5 active')
     expect((await harness().run('licenses', 'device-limit', KEY)).err).toContain('missing the device limit')
+  })
+
+  it('sets when an unused device frees its seat, or turns it off, and prints the license as it now stands', async () => {
+    const h = harness({ answers: [{ status: 200, body: { license: license({ seatReleaseDays: 30 }) } }, { status: 200, body: { license: license({ seatReleaseDays: null }) } }] })
+    const on = await h.run('licenses', 'seat-release', KEY, '30')
+    const off = await h.run('licenses', 'seat-release', KEY, ' OFF ')
+    expect(h.calls.map((c) => [c.method, c.path, c.body])).toEqual([
+      ['POST', `/v1/licenses/${KEY}/seat-release`, { seatReleaseDays: 30 }],
+      ['POST', `/v1/licenses/${KEY}/seat-release`, { seatReleaseDays: null }],
+    ])
+    expect(on).toMatchObject({ code: EXIT.ok, err: '' })
+    expect(on.out).toMatch(new RegExp(`^Key +${KEY}$`, 'm'))
+    expect(on.out).toContain('Unused seats  freed after 30 days unseen')
+    expect(off.out).toContain('Unused seats  kept')
+    const answer = { license: license({ seatReleaseDays: 365 }) }
+    const json = await harness({ answers: [{ status: 200, body: answer }] }).run('licenses', 'seat-release', KEY, '365', '--json')
+    expect(JSON.parse(json.out)).toEqual(answer)
+  })
+
+  it('refuses days the API would not take before asking anything, with no key and no network', async () => {
+    const refusals: [string[], string][] = [
+      [[KEY, '0'], 'the seat release days must be from 1 to 365'],
+      [[KEY, '366'], 'the seat release days must be from 1 to 365'],
+      [[KEY, '-1'], 'the seat release days must be a whole number of days or off, not "-1"'],
+      [[KEY, '7.5'], 'the seat release days must be a whole number of days or off, not "7.5"'],
+      [[KEY, 'none'], 'the seat release days must be a whole number of days or off, not "none"'],
+      [[KEY], 'missing the seat release days (or off)'],
+      [[KEY, '30', 'extra'], 'unexpected argument "extra"'],
+    ]
+    for (const [args, said] of refusals) {
+      const h = harness({ env: {} })
+      expect(await h.run('licenses', 'seat-release', ...args)).toEqual({ code: EXIT.usage, out: '', err: `keygrant: ${said}\nRun \`keygrant licenses seat-release --help\`.` })
+      expect(h.calls).toEqual([])
+    }
+  })
+
+  it('names the API refusing the days: fewer than the key\'s offline days, or a key it does not reach', async () => {
+    const short = await harness({ answers: [{ status: 400, body: { error: 'invalid-seat-release' } }] }).run('licenses', 'seat-release', KEY, '3')
+    expect(short).toEqual({
+      code: EXIT.refused,
+      out: '',
+      err: 'keygrant: invalid-seat-release: the seat release days are fewer than the key\'s offline days: a device is never freed while it may still run offline on its lease (`keygrant licenses get <key>` shows a key\'s offline days, and `keygrant products --json` each model\'s as leaseDays, null for its type\'s default)',
+    })
+    const unknown = await harness({ answers: [{ status: 404, body: { error: 'unknown-license' } }] }).run('licenses', 'seat-release', KEY, '30', '--json')
+    expect(unknown.code).toBe(EXIT.refused)
+    expect(JSON.parse(unknown.err)).toEqual({ error: 'unknown-license', status: 404 })
   })
 
   it('revokes, with a reason when given one', async () => {

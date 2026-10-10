@@ -41,6 +41,7 @@ only; a release needs a `kg_live_` key.
 | `keygrant licenses extend <key> --to <date>` or `--days <n>` | Move its expiry later |
 | `keygrant licenses versions <key> --min <n> --max <n\|none>` | Set the major versions it covers |
 | `keygrant licenses device-limit <key> <n>` | Set how many devices it may be active on |
+| `keygrant licenses seat-release <key> <days\|off>` | Set how many days an unused device keeps its seat before it is freed, or `off` |
 | `keygrant licenses revoke <key> [--reason <reason>]` | Revoke it |
 | `keygrant licenses free-device <key> <activation id>` | Free one device |
 | `keygrant licenses test --product <id> --scenario <state>` | A test license: `valid`, `trial-ending`, `expired`, `revoked` or `device-limit` |

@@ -64,6 +64,7 @@ const SENTENCES: Record<string, (body: Record<string, unknown>) => string> = {
   'term-ended': () => 'the model\'s end date has passed, so a key under it would run out before it was made: give --expires',
   'unknown-entitlement': (b) => `the product's catalog has no entitlement ${JSON.stringify(b.entitlement ?? '?')}`,
   'entitlement-type': (b) => `the entitlement ${JSON.stringify(b.entitlement ?? '?')} is of another type in the product's catalog`,
+  'invalid-seat-release': () => 'the seat release days are fewer than the key\'s offline days: a device is never freed while it may still run offline on its lease (`keygrant licenses get <key>` shows a key\'s offline days, and `keygrant products --json` each model\'s as leaseDays, null for its type\'s default)',
   'mint-failed': () => 'KeyGrant failed while making the key',
 }
 

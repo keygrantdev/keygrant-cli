@@ -1,6 +1,6 @@
 {
   "name": "@keygrant/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The keygrant command: issue, find and change KeyGrant licenses, report releases, fetch a product's public keys and verify leases offline.",
   "license": "MIT",
   "author": "KeyGrant",

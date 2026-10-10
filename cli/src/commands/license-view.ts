@@ -1,3 +1,4 @@
+import { DEFAULT_TTL_SECONDS, LICENSE_MODELS } from '@keygrant/shared'
 import { entitlementsText, fields, majorsText, table, when } from '../output.js'
 
 /** A license as the tenant API answers it (only what the CLI prints is named). */
@@ -17,6 +18,11 @@ export interface License {
   deviceLimit: number
   activeDevices: number
   seats: number
+  /** Its offline days, null for its type's default; absent from a KeyGrant that predates them, as the two below. */
+  leaseDays?: number | null
+  graceDays?: number
+  /** Days an unused device keeps its seat before the nightly pass frees it; null for never. */
+  seatReleaseDays?: number | null
   createdAt: number
   revokedAt: number | null
   revokedReason: string | null
@@ -39,6 +45,29 @@ function ends(l: License): string {
   return when(l.expiresAt)
 }
 
+/** `1 day`, `30 days`. */
+const days = (n: number): string => `${n} ${n === 1 ? 'day' : 'days'}`
+
+/**
+ * How long each of its leases lives offline: its own days, else its type's
+ * default (a timed key's lease is a subscription's); nothing from a KeyGrant
+ * that does not say.
+ */
+function offlineDays(l: License): string | null {
+  if (l.leaseDays === undefined) return null
+  if (l.leaseDays !== null) return days(l.leaseDays)
+  const leaseType = l.model === 'timed' ? 'subscription' : l.model
+  // A type the lease format does not know reads as perpetual, as the worker reads one; whole days up, as its floor counts them.
+  const type = LICENSE_MODELS.find((m) => m === leaseType) ?? 'perpetual'
+  return `${days(Math.ceil(DEFAULT_TTL_SECONDS[type] / 86_400))} (its type's default)`
+}
+
+/** When an unused device's seat is freed, as the dashboard's Unused seats row says it: `freed after 30 days unseen`, or `kept`. */
+function unusedSeats(l: License): string | null {
+  if (l.seatReleaseDays === undefined) return null
+  return l.seatReleaseDays === null ? 'kept' : `freed after ${days(l.seatReleaseDays)} unseen`
+}
+
 /** What it is now: its kind, and why when it was revoked or cancelled; marked when it is a test license. */
 function state(l: License): string {
   const why = l.revokedReason ? ` (${l.revokedReason.replace(/_/g, ' ')})` : ''
@@ -56,7 +85,10 @@ export function licenseBlock(l: License, now: number): string {
     ['Email', l.email],
     ['Expires', ends(l)],
     ['Valid until', l.validUntil === l.expiresAt ? null : when(l.validUntil)],
+    ['Grace', l.graceDays === undefined ? null : l.graceDays ? days(l.graceDays) : 'none'],
     ['Devices', `${l.activeDevices} of ${l.deviceLimit} active${l.seats > 1 ? `, ${l.seats} seats` : ''}`],
+    ['Unused seats', unusedSeats(l)],
+    ['Offline days', offlineDays(l)],
     ['Versions', l.versionRule ? `bound by its first activation (${l.versionRule.replace('_', ' ')})` : majorsText(l.versions, now)],
     ['Entitlements', entitlementsText(l.entitlements)],
     ['Sale', l.sale ? `key ${l.sale.index} of ${l.sale.size} (${l.sale.id})` : null],

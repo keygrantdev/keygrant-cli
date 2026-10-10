@@ -46,6 +46,13 @@ function major(text: string, what: string, noneAllowed: boolean): number | null 
   return wholeNumber(text, what, 1, 99_999)
 }
 
+/** Seat release days as typed: a whole number of days from 1 to 365, or `off` (null) for none. */
+function seatReleaseDays(text: string, what: string): number | null {
+  if (text.trim().toLowerCase() === 'off') return null
+  if (!/^\d+$/.test(text.trim())) throw usage(`${what} must be a whole number of days or off, not "${text}"`)
+  return wholeNumber(text, what, 1, 365)
+}
+
 /** An entitlement's value as typed: `true` or `false`, a number, or else text. */
 function entitlementValue(raw: string): boolean | number | string {
   if (raw === 'true' || raw === 'false') return raw === 'true'
@@ -108,6 +115,8 @@ function issueBody(args: Parsed): Record<string, unknown> {
   if (email !== undefined) body.email = email
   const devices = value(args, 'device-limit')
   if (devices !== undefined) body.deviceLimit = wholeNumber(devices, '--device-limit', 1, 1000)
+  const release = value(args, 'seat-release-days')
+  if (release !== undefined) body.seatReleaseDays = seatReleaseDays(release, '--seat-release-days')
   const expires = value(args, 'expires')
   if (expires !== undefined) body.expiresAt = instant(expires, '--expires', true)
   const entitlements = entitlementsOf(args)
@@ -129,6 +138,8 @@ export const issue: Command = {
   --email <address>           the customer's address
   --send-email                email the key with the product's delivery mail
   --device-limit <n>          1 to 1,000, in place of the model's
+  --seat-release-days <n|off> days, 1 to 365, an unused device keeps its seat before it is freed,
+                              in place of the model's (never fewer than its offline days); off for never
   --expires <date>            when it ends: 2027-01-31 (through that day, UTC), an ISO time with its
                               offset (2027-01-31T12:00:00Z), or 13 digits of ms
   --version <version>         the version sold, "2.4.1"; only its major counts
@@ -150,6 +161,7 @@ Prints each key on a line of its own. --json prints the API's answer, { "key", "
     email: { type: 'value' },
     'send-email': { type: 'flag' },
     'device-limit': { type: 'value' },
+    'seat-release-days': { type: 'value' },
     expires: { type: 'value' },
     version: { type: 'value' },
     'min-major': { type: 'value' },
@@ -252,6 +264,25 @@ prints the API's answer.`,
     const [licenseKey, n] = positionals(args, 'the license key', 'the device limit')
     const body = { deviceLimit: wholeNumber(n as string, 'the device limit', 1, 1000) }
     const answer = await request(ctx, 'POST', `/v1/licenses/${segment(licenseKey as string)}/devices`, { key: await secretKey(ctx), body, expect: answers.license })
+    emit(ctx, answer, () => licenseBlock(answer.license as License, ctx.deps.now()))
+  },
+}
+
+export const seatRelease: Command = {
+  name: 'licenses seat-release',
+  summary: 'Set when an unused device of a license frees its seat.',
+  help: `keygrant licenses seat-release <key> <days|off>
+
+Sets how many days, 1 to 365, a device of the license may go without checking in before the
+nightly pass frees its seat, in place of its model's; off keeps every seat. Never fewer than its
+offline days, how long a device may run on its lease without checking in (invalid-seat-release).
+A device already unseen that long is freed the next night. Prints the license as it now stands;
+--json prints the API's answer.`,
+  options: {},
+  async run(ctx, args) {
+    const [licenseKey, days] = positionals(args, 'the license key', 'the seat release days (or off)')
+    const body = { seatReleaseDays: seatReleaseDays(days as string, 'the seat release days') }
+    const answer = await request(ctx, 'POST', `/v1/licenses/${segment(licenseKey as string)}/seat-release`, { key: await secretKey(ctx), body, expect: answers.license })
     emit(ctx, answer, () => licenseBlock(answer.license as License, ctx.deps.now()))
   },
 }

@@ -107,6 +107,7 @@ describe('the command line', () => {
       [['licenses', 'test', '--product', 'p'], { key: 'K' }],
       [['release', '2', '--product', 'p'], { product: 'p', currentMajor: '2' }],
       [['licenses', 'free-device', 'K', 'act_1'], { released: 2 }],
+      [['licenses', 'seat-release', 'K', '30'], { license: { seatReleaseDays: 30 } }],
     ] as const) {
       const res = await harness({ answers: [{ status: 200, body }] }).run(...argv)
       // An issue's adds the idempotency key it made, as for any answer it cannot read.
