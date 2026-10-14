@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0
+
+- `licenses file <key> [--out <path>] [--force] [--resign]` saves a key's license file or key file (a
+  `.kglicense`) for a license model that delivers one: the file as KeyGrant keeps it while the key says the
+  same, otherwise signed again with the current key. It writes `<product>-license.kglicense` in the current
+  folder, or `--out`, readable by you alone on macOS and Linux, and refuses to replace a file that is there unless `--force`.
+  `--resign` signs it again with the key that signs now, the remedy after a signing key leaked. `--json`
+  prints the API's answer with the file's content left out, and the `path` it was saved to.
+- `verify` takes a license file or key file too, as a path, its text on standard input or its token alone,
+  and verifies it offline as every SDK does (the container, the header and its key id, the signature by that
+  key alone, the claims). It prints the file's kind, product, licensee, key, versions, file id and the id of
+  the key that signed it. A file never expires, so `--at` does not apply to one.
+- `license-revoked` is worded for a key that is sent no file as well as for one that cannot be extended.
+- `verify` of a `.kglicense` that cannot be read is exit 2, as an unreadable key set is.
+
 ## 0.2.0
 
 - `licenses seat-release <key> <days|off>`: how many days, 1 to 365, a device of the license may go without

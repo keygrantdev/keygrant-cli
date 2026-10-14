@@ -142,7 +142,7 @@ describe('keygrant verify, as every SDK verifies', () => {
     expect(res.out.split('\n')[0]).toBe('Not valid: expired: it has expired.')
     expect(res.out).toContain('License ')
     const garbage = await harness({ env: {}, files: { 'k.json': JSON.stringify(vectors.publicJwk) } }).run('verify', 'a.b.c', '--key', 'k.json')
-    expect(garbage).toMatchObject({ code: EXIT.refused, out: 'Not valid: malformed: it is not a lease (a JWS of three base64url parts).' })
+    expect(garbage).toMatchObject({ code: EXIT.refused, out: 'Not valid: malformed: it is not a lease (a JWS of three base64url parts); a license file is read as one by a name ending .kglicense.' })
   })
 
   it('refuses a valid lease of another product with --product', async () => {

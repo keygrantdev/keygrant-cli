@@ -56,6 +56,14 @@ export interface Setup {
   terminal?: boolean
   typed?: string
   files?: Record<string, string>
+  /** Files read as raw bytes, for text that is not UTF-8 (a text in `files` is read as its UTF-8). */
+  fileBytes?: Record<string, Uint8Array>
+  /** Standard input as raw bytes, when `stdin` is not UTF-8. */
+  stdinBytes?: Uint8Array
+  /** Paths a write finds taken (a file already there), besides `files`. */
+  taken?: string[]
+  /** The error a write fails with, other than the path being taken. */
+  writeError?: Error
   store?: MemoryStore
   now?: number
 }
@@ -79,6 +87,8 @@ export function harness(setup: Setup = {}) {
   const err: string[] = []
   const sleeps: number[] = []
   const prompts: string[] = []
+  /** What the command saved, by path, and whether it was told to overwrite. */
+  const written = new Map<string, { text: string; overwrite: boolean }>()
   const store = setup.store ?? new MemoryStore()
   const deps: Deps = {
     async fetch(url, init) {
@@ -108,6 +118,7 @@ export function harness(setup: Setup = {}) {
     out: (text) => out.push(text),
     err: (text) => err.push(text),
     readStdin: async () => setup.stdin ?? '',
+    readStdinBytes: async () => setup.stdinBytes ?? new TextEncoder().encode(setup.stdin ?? ''),
     stdinIsTerminal: setup.terminal ?? false,
     promptSecret: async (question) => {
       prompts.push(question)
@@ -117,6 +128,18 @@ export function harness(setup: Setup = {}) {
       const text = setup.files?.[path]
       if (text === undefined) throw new Error(`ENOENT: no such file, open '${path}'`)
       return text
+    },
+    readFileBytes: async (path) => {
+      const bytes = setup.fileBytes?.[path] ?? (setup.files?.[path] === undefined ? undefined : new TextEncoder().encode(setup.files[path]))
+      if (bytes === undefined) throw new Error(`ENOENT: no such file, open '${path}'`)
+      return bytes
+    },
+    writeFile: async (path, text, overwrite) => {
+      if (setup.writeError) throw setup.writeError
+      if (!overwrite && (written.has(path) || setup.files?.[path] !== undefined || setup.taken?.includes(path))) {
+        throw Object.assign(new Error(`EEXIST: file already exists, open '${path}'`), { code: 'EEXIST' })
+      }
+      written.set(path, { text, overwrite })
     },
     credentials: store,
     sleep: async (ms) => {
@@ -130,6 +153,7 @@ export function harness(setup: Setup = {}) {
     calls,
     sleeps,
     prompts,
+    written,
     store,
     /** Runs one command line; what it printed is this run's alone. */
     async run(...argv: string[]) {

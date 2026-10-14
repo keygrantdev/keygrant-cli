@@ -1,9 +1,10 @@
-import { importVerifyingKeys, OPEN_MAJOR, verifyLease, type LeaseClaims, type VerifyingKey } from '@keygrant/shared'
+import { importVerifyingKeys, LICENSE_FILE_EXTENSION, OPEN_MAJOR, verifyLease, type LeaseClaims, type VerifyingKey } from '@keygrant/shared'
 import { instant, usage, value } from '../args.js'
-import { answers, request } from '../api.js'
+import { answers, request, type Context } from '../api.js'
 import { emit, positionals, segment, type Command } from '../command.js'
-import { EXIT } from '../errors.js'
+import { EXIT, type ExitCode } from '../errors.js'
 import { asJson, entitlementsText, fields, when } from '../output.js'
+import { fileFields, fileHead, isLicenseFile, verifyFileBytes, type FileVerdict } from './file-view.js'
 
 export const pubkey: Command = {
   name: 'pubkey',
@@ -34,19 +35,41 @@ Needs no API key. --json prints the API's answer, { "publicJwk", "keys" }.`,
 const JWS = /^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$/
 
 /**
- * The lease to check: standard input for `-`, the argument itself when it is a
- * JWS, else the file it names (holding the token, or JSON with a `lease`). An
- * argument that is neither is checked as it is, and is no lease.
+ * What `verify` is asked to check: its bytes (a license file is judged by
+ * them, strictly), the same read as text (a lease is), and the file it was
+ * read from (null for standard input or the argument itself).
  */
-async function readLease(ctx: Parameters<Command['run']>[0], arg: string): Promise<string> {
-  if (arg === '-') return (await ctx.deps.readStdin()).trim()
-  if (JWS.test(arg.trim())) return arg.trim()
-  let text: string
+interface Subject {
+  bytes: Uint8Array
+  text: string
+  path: string | null
+}
+
+function subjectOf(bytes: Uint8Array, path: string | null): Subject {
+  return { bytes, text: new TextDecoder().decode(bytes), path }
+}
+
+/**
+ * The text to check: standard input for `-`, the argument itself when it is a
+ * JWS, else the file it names (one named `.kglicense` that cannot be read is a
+ * usage error). An argument that is neither is checked as it is, and is no lease.
+ */
+async function readSubject(ctx: Context, arg: string): Promise<Subject> {
+  if (arg === '-') return subjectOf(await ctx.deps.readStdinBytes(), null)
+  if (JWS.test(arg.trim())) return subjectOf(new TextEncoder().encode(arg.trim()), null)
   try {
-    text = (await ctx.deps.readFile(arg)).trim()
-  } catch {
-    return arg
+    return subjectOf(await ctx.deps.readFileBytes(arg), arg)
+  } catch (error) {
+    // A name that says it is a license file is one to find, not a text to check.
+    if (arg.toLowerCase().endsWith(LICENSE_FILE_EXTENSION)) throw usage(`cannot read the license file from ${arg}: ${error instanceof Error ? error.message : String(error)}`)
+    return subjectOf(new TextEncoder().encode(arg), null)
   }
+}
+
+/** The lease in a subject: its text, or, in a file, the `lease` of JSON that holds one. */
+function leaseOf(subject: Subject): string {
+  const text = subject.text.trim()
+  if (subject.path === null) return text
   try {
     const parsed: unknown = JSON.parse(text)
     if (parsed && typeof parsed === 'object' && typeof (parsed as { lease?: unknown }).lease === 'string') return (parsed as { lease: string }).lease
@@ -86,7 +109,7 @@ export async function keysOf(text: string, where: string): Promise<VerifyingKey[
 }
 
 const REASONS: Record<string, string> = {
-  malformed: 'it is not a lease (a JWS of three base64url parts)',
+  malformed: 'it is not a lease (a JWS of three base64url parts); a license file is read as one by a name ending .kglicense',
   'unknown-key': 'it names a signing key the key set does not hold: update the key set (`keygrant pubkey`)',
   'bad-signature': 'its signature is not by any key of the key set',
   'bad-claims': 'its claims are not a KeyGrant lease\'s',
@@ -121,29 +144,38 @@ function claimFields(c: LeaseClaims): string {
 
 export const verify: Command = {
   name: 'verify',
-  summary: 'Verify a lease against a public key set, offline.',
-  help: `keygrant verify <lease | - | file> --key <file> [--product <id>] [--at <time>]
+  summary: 'Verify a lease, a license file or a key file against a public key set, offline.',
+  help: `keygrant verify <lease | license file | - | file> --key <file> [--product <id>] [--at <time>]
 
   <lease>          the lease itself, - for standard input, or a file holding it (the token,
                    or JSON with a "lease")
+  <license file>   a license file or key file (.kglicense), as the buyer is sent it: its path, or - for
+                   its text on standard input (the file's token alone is read too). A file named
+                   .kglicense, or a token whose header says it is a license file's, is read as one
   --key <file>     the key set \`keygrant pubkey\` prints, the pubkey route's answer, or one JWK
-  --product <id>   also require the lease to be this product's
-  --at <time>      judge its expiry at this time instead of now: a date (its first moment, UTC), an
-                   ISO time with its offset, or ms
+  --product <id>   also require it to be this product's
+  --at <time>      judge a lease's expiry at this time instead of now: a date (its first moment, UTC), an
+                   ISO time with its offset, or ms. A license file never expires, so it is not read
 
-Exactly as an SDK does, with no network: the signature by the key the lease names (each key in
-turn for a lease that names none), its claims, then its expiry. Prints what it grants. Exits 0
-for a valid lease and 1 for one that is not; --json prints { "valid", "reason"?, "claims"? }.`,
+Exactly as an SDK does, with no network. A lease: the signature by the key it names (each key in
+turn for a lease that names none), its claims, then its expiry. A license file: its container (one
+token, notes on lines starting with #), its header and key id, the signature by that key alone, then
+its claims; the key set must hold every key that ever signed a file (\`keygrant pubkey\` prints them).
+Prints what it grants (a file: its kind, product, licensee, key, versions, id, and the key that
+signed it). Exits 0 for a valid one and 1 for one that is not; --json prints { "valid", "reason"?,
+"claims"? }, and for a file the "kid" its header names.`,
   options: { key: { type: 'value' }, product: { type: 'value' }, at: { type: 'value' } },
   async run(ctx, args) {
-    const [arg] = positionals(args, 'the lease')
+    const [arg] = positionals(args, 'the lease or license file')
     const keyFile = value(args, 'key')
     if (!keyFile) throw usage('--key <file> is required: save the key set with `keygrant pubkey <product> > keys.json`')
     const at = value(args, 'at')
     const now = at === undefined ? ctx.deps.now() : instant(at, '--at', false)
     const keys = await keysOf(await readText(ctx, keyFile, 'the key set'), keyFile)
-    const result = await verifyLease(await readLease(ctx, arg as string), keys, now)
+    const subject = await readSubject(ctx, arg as string)
     const product = value(args, 'product')
+    if (isLicenseFile(subject.bytes, subject.path)) return verifyFile(ctx, subject.bytes, keys, product)
+    const result = await verifyLease(leaseOf(subject), keys, now)
     const verdict =
       result.valid && product !== undefined && result.claims.product !== product
         ? { valid: false as const, reason: 'wrong-product', claims: result.claims }
@@ -154,4 +186,15 @@ for a valid lease and 1 for one that is not; --json prints { "valid", "reason"?,
     })
     return verdict.valid ? EXIT.ok : EXIT.refused
   },
+}
+
+/** `verify` of a license file or key file: offline, by the strict reader, the product checked when asked. */
+async function verifyFile(ctx: Context, bytes: Uint8Array, keys: VerifyingKey[], product: string | undefined): Promise<ExitCode> {
+  const read = await verifyFileBytes(bytes, keys)
+  const verdict: FileVerdict = read.valid && product !== undefined && read.claims.product !== product ? { ...read, valid: false, reason: 'wrong-product' } : read
+  emit(ctx, verdict, () => {
+    const head = fileHead(verdict)
+    return verdict.claims ? `${head}\n\n${fileFields(verdict.claims, verdict.kid)}` : head
+  })
+  return verdict.valid ? EXIT.ok : EXIT.refused
 }

@@ -3,15 +3,18 @@ import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { Writable } from 'node:stream'
 import type { Deps } from './deps.js'
+import { readAll, saveFile } from './files.js'
 import { osCredentialStore } from './keyring.js'
 import { run } from './run.js'
 
 /** The `keygrant` command: Node's side of everything run.ts reaches. */
 
+function readStdinBytes(): Promise<Uint8Array> {
+  return readAll(process.stdin)
+}
+
 async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = []
-  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Buffer))
-  return Buffer.concat(chunks).toString('utf8')
+  return Buffer.from(await readStdinBytes()).toString('utf8')
 }
 
 /** Asks on the terminal, echoing nothing of what is typed. Ctrl-C there ends the command, exit 130, as a shell's interrupt does; Ctrl-D answers nothing. */
@@ -53,9 +56,12 @@ const deps: Deps = {
   out: (text) => process.stdout.write(`${text}\n`),
   err: (text) => process.stderr.write(`${text}\n`),
   readStdin,
+  readStdinBytes,
   stdinIsTerminal: process.stdin.isTTY === true,
   promptSecret,
   readFile: (path) => readFile(path, 'utf8'),
+  readFileBytes: (path) => readFile(path),
+  writeFile: saveFile,
   credentials: osCredentialStore(process.platform),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => Date.now(),

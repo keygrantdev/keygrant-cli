@@ -120,7 +120,7 @@ describe('an answer that is not a license', () => {
       'invalid-request', 'invalid-json', 'invalid-versions', 'unknown-license', 'unknown-product', 'unknown-model', 'unknown-checkout',
       'checkout-upgraded', 'checkout-held', 'checkout-refunded', 'product-disabled', 'not-expiring', 'term-not-started', 'license-revoked',
       'test-ceiling-reached', 'idempotency-key-reused', 'edition-upgrade-model', 'device-upgrade-model', 'term-required', 'term-ended',
-      'unknown-entitlement', 'mint-failed',
+      'unknown-entitlement', 'mint-failed', 'not-a-file-license', 'no-licensee', 'license-expires',
     ]
     const seen = new Set<string>()
     for (const code of codes) {

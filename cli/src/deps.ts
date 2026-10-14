@@ -10,12 +10,21 @@ export interface Deps {
   err: (text: string) => void
   /** Standard input, read to its end. */
   readStdin: () => Promise<string>
+  /** Standard input's bytes, read to its end: what a license file is judged by (valid UTF-8 or not a license file). */
+  readStdinBytes: () => Promise<Uint8Array>
   /** Whether a person is at standard input (a terminal), not a pipe. */
   stdinIsTerminal: boolean
   /** Asks a person for a secret on the terminal, without echoing it. */
   promptSecret: (question: string) => Promise<string>
   /** A file's text; rejects when it cannot be read. */
   readFile: (path: string) => Promise<string>
+  /** A file's bytes; rejects when it cannot be read. */
+  readFileBytes: (path: string) => Promise<Uint8Array>
+  /**
+   * Saves `text` at `path` (UTF-8, readable by its owner alone where the system has modes); without
+   * `overwrite` it rejects, with the error code `EEXIST`, when something is there.
+   */
+  writeFile: (path: string, text: string, overwrite: boolean) => Promise<void>
   credentials: CredentialStore
   sleep: (ms: number) => Promise<void>
   now: () => number

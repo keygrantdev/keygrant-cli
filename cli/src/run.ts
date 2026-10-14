@@ -9,6 +9,7 @@ import { login, logout } from './commands/auth.js'
 import { products, release, testLicense } from './commands/catalog.js'
 import { pubkey, verify } from './commands/keys.js'
 import { checkout, get, list } from './commands/licenses-read.js'
+import { licenseFile } from './commands/licenses-file.js'
 import { deviceLimit, extend, freeDevice, issue, revoke, seatRelease, versions } from './commands/licenses-write.js'
 
 /** Every command, in the order the help lists them. */
@@ -20,6 +21,7 @@ export const COMMANDS: readonly Command[] = [
   get,
   list,
   checkout,
+  licenseFile,
   extend,
   versions,
   deviceLimit,
@@ -40,8 +42,8 @@ const ENV_HELP = `Environment:
   KEYGRANT_API_KEY   a secret API key (kg_live_... or kg_test_...), used before a kept one
   KEYGRANT_API_URL   KeyGrant's address (https://api.keygrant.dev by default)`
 
-const EXIT_HELP = `Exit codes: 0 done; 1 KeyGrant refused it, a lease is not valid, or it failed otherwise;
-2 the command line is wrong; 3 no API key, or one KeyGrant does not accept; 4 rate limited;
+const EXIT_HELP = `Exit codes: 0 done; 1 KeyGrant refused it, a lease or license file is not valid, or it failed otherwise;
+2 the command line is wrong, or a file it names cannot be read or written; 3 no API key, or one KeyGrant does not accept; 4 rate limited;
 5 KeyGrant could not be reached or failed.`
 
 function mainHelp(): string {

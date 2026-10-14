@@ -172,6 +172,13 @@ export const has = {
   object: (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v),
   license: (v: unknown): boolean => has.object(v) && typeof v.key === 'string',
   licenses: (v: unknown): boolean => Array.isArray(v) && v.every(has.license),
+  /** A license file as the file route answers it: its facts, and its content to save under its name. */
+  file: (v: unknown): boolean =>
+    has.object(v) &&
+    ['id', 'kid', 'filename', 'mediaType', 'content'].every((name) => typeof v[name] === 'string') &&
+    (v.kind === 'key' || v.kind === 'offline') &&
+    typeof v.issuedAt === 'number' &&
+    typeof v.signedAt === 'number',
 }
 
 type Answer = (body: Record<string, unknown>) => boolean
@@ -185,6 +192,7 @@ export const answers = {
   testLicense: ((b) => typeof b.key === 'string' && has.license(b.license)) as Answer,
   products: ((b) => Array.isArray(b.products) && b.products.every((p) => has.object(p) && typeof p.slug === 'string' && Array.isArray(p.models))) as Answer,
   release: ((b) => typeof b.currentMajor === 'number') as Answer,
+  file: ((b) => has.file(b.file)) as Answer,
   keySet: ((b) => Array.isArray(b.keys) && has.object(b.publicJwk)) as Answer,
   revoked: ((b) => b.ok === true) as Answer,
   released: ((b) => b.released === 0 || b.released === 1) as Answer,
