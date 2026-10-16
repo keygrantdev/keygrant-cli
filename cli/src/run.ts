@@ -10,6 +10,7 @@ import { products, release, testLicense } from './commands/catalog.js'
 import { pubkey, verify } from './commands/keys.js'
 import { checkout, get, list } from './commands/licenses-read.js'
 import { licenseFile } from './commands/licenses-file.js'
+import { meters, use, uses } from './commands/licenses-meters.js'
 import { deviceLimit, extend, freeDevice, issue, revoke, seatRelease, versions } from './commands/licenses-write.js'
 
 /** Every command, in the order the help lists them. */
@@ -26,6 +27,9 @@ export const COMMANDS: readonly Command[] = [
   versions,
   deviceLimit,
   seatRelease,
+  meters,
+  uses,
+  use,
   revoke,
   freeDevice,
   testLicense,

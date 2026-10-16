@@ -5,6 +5,7 @@ import { CliError, EXIT } from '../errors.js'
 import { entitlementsText, table } from '../output.js'
 import { idempotencyKeyOf, minting } from './licenses-write.js'
 import { licenseBlock, termText, type License } from './license-view.js'
+import { modelMetersText, productMetersText, type ModelMeter, type ProductMeter } from './meter-view.js'
 
 /** A license model as `GET /v1/products` answers it (only what the CLI prints is named). */
 interface Model {
@@ -16,6 +17,9 @@ interface Model {
   entitlements: Record<string, unknown>
   upgradesExisting: boolean
   addsDevices: number
+  /** What its keys count, and the uses one unit of a top-up adds; absent from a KeyGrant that predates meters. */
+  meters?: ModelMeter[]
+  addsUses?: Record<string, number>
   termLength: number | null
   termUnit: 'days' | 'months' | null
   endsAt: number | null
@@ -27,12 +31,15 @@ interface Product {
   keyPrefix: string
   currentMajor: number
   archived: boolean
+  /** The meters its apps spend; absent from a KeyGrant that predates meters. */
+  meters?: ProductMeter[]
   models: Model[]
 }
 
 /** What a model sells, in a word or two: its type, and what makes it more than that. */
 function modelKind(m: Model): string {
   if (m.addsDevices > 0) return 'device upgrade'
+  if (Object.keys(m.addsUses ?? {}).length > 0) return 'uses upgrade'
   if (m.upgradesExisting) return `${m.type} upgrade`
   if (m.type === 'timed' && m.termLength && m.termUnit) {
     return `timed, ${termText(m.termUnit === 'months' ? { months: m.termLength, days: 0 } : { months: 0, days: m.termLength })}`
@@ -48,8 +55,10 @@ export const products: Command = {
 
   --product <id>   one product, by its API ID
 
-Prints each product (its API ID, key prefix and current version) with its license models'
-ids, which --model takes. --json prints the API's answer, { "products": [ ... ] }, with --product
+Prints each product (its API ID, key prefix and current version) with the meters its apps spend
+and its license models' ids, which --model takes. A model that counts uses shows its meters (the
+code, its uses, "a period" when they come back each billing period, and its own offline allowance),
+and a top-up the uses a unit adds (+500 exports). --json prints the API's answer, { "products": [ ... ] }, with --product
 only that product in it.`,
   options: { product: { type: 'value' } },
   async run(ctx, args) {
@@ -63,10 +72,22 @@ only that product in it.`,
       if (shown.length === 0) return 'No products yet: make one on the dashboard.'
       return shown
         .map((p) => {
-          const head = `${p.slug}  ${p.name}  (keys ${p.keyPrefix}-..., current version ${p.currentMajor}${p.archived ? ', archived' : ''})`
+          const catalog = productMetersText(p.meters)
+          const head = `${p.slug}  ${p.name}  (keys ${p.keyPrefix}-..., current version ${p.currentMajor}${p.archived ? ', archived' : ''})${catalog ? `\n  meters: ${catalog}` : ''}`
           if (!p.models.length) return `${head}\n  no license models`
-          const rows = p.models.map((m) => [m.id, m.name, modelKind(m), String(m.deviceLimit), entitlementsText(m.entitlements), m.archived ? 'archived' : ''])
-          return `${head}\n${table(['MODEL', 'NAME', 'SELLS', 'DEVICES', 'ENTITLEMENTS', ''], rows).replace(/^/gm, '  ')}`
+          // The column is there when a model of the product counts uses, so a product without meters prints as it did.
+          const metered = p.models.some((m) => modelMetersText(m.meters, m.addsUses) !== '')
+          const rows = p.models.map((m) => [
+            m.id,
+            m.name,
+            modelKind(m),
+            String(m.deviceLimit),
+            entitlementsText(m.entitlements),
+            ...(metered ? [modelMetersText(m.meters, m.addsUses)] : []),
+            m.archived ? 'archived' : '',
+          ])
+          const header = ['MODEL', 'NAME', 'SELLS', 'DEVICES', 'ENTITLEMENTS', ...(metered ? ['METERS'] : []), '']
+          return `${head}\n${table(header, rows).replace(/^/gm, '  ')}`
         })
         .join('\n\n')
     })

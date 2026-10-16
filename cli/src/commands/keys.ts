@@ -5,6 +5,7 @@ import { emit, positionals, segment, type Command } from '../command.js'
 import { EXIT, type ExitCode } from '../errors.js'
 import { asJson, entitlementsText, fields, when } from '../output.js'
 import { fileFields, fileHead, isLicenseFile, verifyFileBytes, type FileVerdict } from './file-view.js'
+import { leaseMetersText } from './meter-view.js'
 
 export const pubkey: Command = {
   name: 'pubkey',
@@ -134,6 +135,7 @@ function claimFields(c: LeaseClaims): string {
     ['Majors', majors(c)],
     ['Upgrades until', c.upgradeUntil ? when(c.upgradeUntil * 1000) : null],
     ['Entitlements', entitlementsText(c.ent)],
+    ['Meters', leaseMetersText(c.met)],
     ['Device', c.fp ? `bound (${c.fpk ?? 'kind not said'})` : 'not bound'],
     ['Issued', when(c.iat * 1000)],
     ['Expires', when(c.exp * 1000)],
@@ -161,7 +163,8 @@ Exactly as an SDK does, with no network. A lease: the signature by the key it na
 turn for a lease that names none), its claims, then its expiry. A license file: its container (one
 token, notes on lines starting with #), its header and key id, the signature by that key alone, then
 its claims; the key set must hold every key that ever signed a file (\`keygrant pubkey\` prints them).
-Prints what it grants (a file: its kind, product, licensee, key, versions, id, and the key that
+Prints what it grants, a metered key's meters with what was left of each when the lease was signed
+(a file: its kind, product, licensee, key, versions, id, and the key that
 signed it). Exits 0 for a valid one and 1 for one that is not; --json prints { "valid", "reason"?,
 "claims"? }, and for a file the "kid" its header names.`,
   options: { key: { type: 'value' }, product: { type: 'value' }, at: { type: 'value' } },

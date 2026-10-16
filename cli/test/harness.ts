@@ -202,3 +202,19 @@ export function request(call: Call | undefined): Omit<Call, 'signal'> | undefine
   const { signal: _signal, ...sent } = call
   return sent
 }
+
+/** A key's meter as the tenant API answers it on a license: 1,500 uses with 950 spent, with what a test changes. */
+export function meter(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    uses: 1000,
+    extra: 500,
+    used: 950,
+    left: 550,
+    overage: 0,
+    offline: 150,
+    ownOffline: null,
+    resets: 'never',
+    periodEnd: null,
+    ...overrides,
+  }
+}

@@ -170,7 +170,27 @@ export function retryWait(body: Record<string, unknown>, header: string | null):
 /** Shapes the commands' answers are held to (`RequestOptions.expect`). */
 export const has = {
   object: (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v),
-  license: (v: unknown): boolean => has.object(v) && typeof v.key === 'string',
+  /** A whole number of uses, as a meter counts them. */
+  uses: (v: unknown): boolean => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0,
+  /** A key's meter as a licence shows it, the members the CLI prints. */
+  meter: (v: unknown): boolean =>
+    has.object(v) &&
+    ['uses', 'extra', 'used', 'left', 'overage', 'offline'].every((name) => has.uses(v[name])) &&
+    (v.ownOffline === null || has.uses(v.ownOffline)) &&
+    typeof v.resets === 'string' &&
+    (v.periodEnd === null || typeof v.periodEnd === 'number'),
+  /** A licence's meters (`{}` for none), by code; a KeyGrant from before meters says none, which is as good as `{}`. */
+  meters: (v: unknown): boolean => v === undefined || (has.object(v) && Object.values(v).every(has.meter)),
+  /** A product's meters, as `GET /v1/products` lists them. */
+  catalog: (v: unknown): boolean => v === undefined || (Array.isArray(v) && v.every((m) => has.object(m) && typeof m.code === 'string' && typeof m.name === 'string')),
+  /** A model's meters and the uses a top-up adds, as `GET /v1/products` lists them. */
+  modelMeters: (m: unknown): boolean =>
+    has.object(m) &&
+    (m.meters === undefined ||
+      (Array.isArray(m.meters) &&
+        m.meters.every((x) => has.object(x) && typeof x.code === 'string' && has.uses(x.uses) && typeof x.resets === 'string' && (x.offline === null || x.offline === undefined || has.uses(x.offline))))) &&
+    (m.addsUses === undefined || (has.object(m.addsUses) && Object.values(m.addsUses).every(has.uses))),
+  license: (v: unknown): boolean => has.object(v) && typeof v.key === 'string' && has.meters(v.meters),
   licenses: (v: unknown): boolean => Array.isArray(v) && v.every(has.license),
   /** A license file as the file route answers it: its facts, and its content to save under its name. */
   file: (v: unknown): boolean =>
@@ -190,10 +210,14 @@ export const answers = {
   checkout: ((b) => has.license(b.license) && (b.licenses === undefined || (has.licenses(b.licenses) && (b.licenses as unknown[]).length > 0))) as Answer,
   issued: ((b) => typeof b.key === 'string' && (b.keys === undefined || (Array.isArray(b.keys) && b.keys.length > 0 && b.keys.every((k) => typeof k === 'string')))) as Answer,
   testLicense: ((b) => typeof b.key === 'string' && has.license(b.license)) as Answer,
-  products: ((b) => Array.isArray(b.products) && b.products.every((p) => has.object(p) && typeof p.slug === 'string' && Array.isArray(p.models))) as Answer,
+  products: ((b) =>
+    Array.isArray(b.products) &&
+    b.products.every((p) => has.object(p) && typeof p.slug === 'string' && Array.isArray(p.models) && has.catalog(p.meters) && p.models.every(has.modelMeters))) as Answer,
   release: ((b) => typeof b.currentMajor === 'number') as Answer,
   file: ((b) => has.file(b.file)) as Answer,
   keySet: ((b) => Array.isArray(b.keys) && has.object(b.publicJwk)) as Answer,
+  /** A meter after a backend's spend: `{ meter }`, the meter as a licence shows it. */
+  spent: ((b) => has.meter(b.meter)) as Answer,
   revoked: ((b) => b.ok === true) as Answer,
   released: ((b) => b.released === 0 || b.released === 1) as Answer,
 }

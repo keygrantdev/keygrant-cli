@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0
+
+- `licenses meters <key>` shows what a license counts: each meter's uses left, total, used and added, its
+  offline allowance (and whether that is the default), when it resets and, when any meter has some, its
+  overage. `--json` prints the API's answer.
+- `licenses uses <key> <meter>` changes a meter with exactly one of `--add <n>`, `--set <n>`,
+  `--offline <n|default>` and `--reset`. `--add` and `--reset` send an idempotency key (`--idempotency-key`,
+  else one made for the run), and an error that may have changed the meter all the same names it.
+- `licenses use <key> <meter> [n] [--id <id>]` spends a meter from your backend: exact, whole or none, and
+  idempotent by its id (`--id`, else one made for the run, named by an error that may have spent all the
+  same).
+- A license printed in full shows its meters in a line, `products` lists a product's meters, what each
+  license model counts and the uses a top-up adds, and `verify` prints a lease's meters.
+- `license-revoked` is worded for a key that is spent from as well as for one that cannot be extended or
+  sent a file; `used-up`, `unknown-meter`, `meter-not-periodic`, `license-expired` and the other meter
+  refusals are named in a sentence.
+
+## 0.3.1
+
+- `verify` reads leases that carry meters (the `met` claim a metered license's lease signs). Nothing else
+  changes for its users.
+
 ## 0.3.0
 
 - `licenses file <key> [--out <path>] [--force] [--resign]` saves a key's license file or key file (a

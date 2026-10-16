@@ -1,8 +1,8 @@
 # The KeyGrant command line
 
 `@keygrant/cli` is the `keygrant` command: it works with [KeyGrant](https://keygrant.dev) licenses from a
-terminal or a build pipeline. Issue, find and change licenses, make test licenses, report a release, fetch a
-product's public keys, and verify a lease offline.
+terminal or a build pipeline. Issue, find and change licenses and the meters they count, make test licenses,
+report a release, fetch a product's public keys, and verify a lease offline.
 
 ```sh
 npx @keygrant/cli --help

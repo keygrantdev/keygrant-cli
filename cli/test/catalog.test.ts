@@ -71,6 +71,118 @@ describe('keygrant products', () => {
   })
 })
 
+describe('keygrant products, for a product that counts uses', () => {
+  const metered = {
+    products: [
+      {
+        slug: 'render',
+        name: 'Render',
+        keyPrefix: 'RENDER',
+        currentMajor: 2,
+        archived: false,
+        meters: [
+          { code: 'exports', name: 'Exports', description: null },
+          { code: 'renders', name: 'Cloud renders', description: 'Rendered on our servers' },
+        ],
+        models: [
+          model({ id: 'mod_free', name: 'Free', type: 'trial' }),
+          model({ id: 'mod_pack', name: 'Pack', type: 'perpetual', meters: [{ code: 'exports', uses: 1000, resets: 'never', offline: null }] }),
+          model({
+            id: 'mod_monthly',
+            name: 'Monthly',
+            type: 'subscription',
+            meters: [
+              { code: 'exports', uses: 1000000, resets: 'never', offline: 0 },
+              { code: 'renders', uses: 50, resets: 'period', offline: 5 },
+            ],
+          }),
+          model({ id: 'mod_more', name: 'More exports', type: 'perpetual', upgradesExisting: true, addsUses: { exports: 500, renders: 10 } }),
+        ],
+      },
+      { slug: 'plain', name: 'Plain', keyPrefix: 'PLAIN', currentMajor: 1, archived: false, meters: [], models: [model({ id: 'mod_one', name: 'One', meters: [], addsUses: {} })] },
+    ],
+  }
+
+  it('lists the meters its apps spend, what each model counts and the uses a top-up adds, and the column only where a model counts', async () => {
+    const h = harness({ answers: [{ status: 200, body: metered }] })
+    const res = await h.run('products')
+    expect(res.out).toBe(
+      [
+        'render  Render  (keys RENDER-..., current version 2)',
+        '  meters: exports (Exports), renders (Cloud renders)',
+        '  MODEL        NAME          SELLS         DEVICES  ENTITLEMENTS  METERS',
+        '  mod_free     Free          trial         3        none',
+        '  mod_pack     Pack          perpetual     3        none          exports 1,000',
+        '  mod_monthly  Monthly       subscription  3        none          exports 1,000,000 (offline 0); renders 50 a period (offline 5)',
+        '  mod_more     More exports  uses upgrade  3        none          +500 exports; +10 renders',
+        '',
+        'plain  Plain  (keys PLAIN-..., current version 1)',
+        '  MODEL    NAME  SELLS         DEVICES  ENTITLEMENTS',
+        '  mod_one  One   subscription  3        none',
+      ].join('\n'),
+    )
+  })
+
+  it('calls a model that adds uses a uses upgrade, and a product with meters but no models says so', async () => {
+    const body = {
+      products: [
+        {
+          slug: 'render',
+          name: 'Render',
+          keyPrefix: 'RENDER',
+          currentMajor: 2,
+          archived: false,
+          meters: [{ code: 'exports', name: 'Exports', description: null }],
+          models: [model({ id: 'mod_more', name: 'More', type: 'perpetual', upgradesExisting: true, addsUses: { exports: 500 } })],
+        },
+        { slug: 'empty', name: 'Empty', keyPrefix: 'EMPTY', currentMajor: 1, archived: false, meters: [{ code: 'x', name: 'X', description: null }], models: [] },
+      ],
+    }
+    const res = await harness({ answers: [{ status: 200, body }] }).run('products')
+    expect(res.out).toContain('mod_more  More  uses upgrade  3        none          +500 exports')
+    expect(res.out).toContain('empty  Empty  (keys EMPTY-..., current version 1)\n  meters: x (X)\n  no license models')
+  })
+
+  it('lists a meter with no allowance of its own as its uses alone, and calls a device upgrade that also adds uses a device upgrade', async () => {
+    const body = {
+      products: [
+        {
+          ...metered.products[0],
+          models: [
+            model({ id: 'mod_both', name: 'Both', meters: [{ code: 'exports', uses: 10, resets: 'never' }] }),
+            model({ id: 'mod_dev', name: 'Devices', type: 'perpetual', upgradesExisting: true, addsDevices: 2, addsUses: { exports: 1 } }),
+          ],
+        },
+      ],
+    }
+    const res = await harness({ answers: [{ status: 200, body }] }).run('products')
+    expect(res.out).toContain('mod_both  Both     subscription    3        none          exports 10')
+    expect(res.out).toContain('mod_dev   Devices  device upgrade  3        none          +1 exports')
+  })
+
+  it('prints the API answer under --json, and takes a meter it cannot read for something other than KeyGrant', async () => {
+    const json = await harness({ answers: [{ status: 200, body: metered }] }).run('products', '--json')
+    expect(JSON.parse(json.out)).toEqual(metered)
+    const odd = [
+      { meters: 'exports' },
+      { meters: [{ code: 'exports' }] },
+      { models: [model({ meters: [{ code: 'exports', uses: '5', resets: 'never', offline: null }] })] },
+      { models: [model({ meters: [{ code: 'exports', uses: 5, resets: 5, offline: null }] })] },
+      { models: [model({ meters: [{ code: 'exports', uses: 5, resets: 'never', offline: -1 }] })] },
+      { models: [model({ addsUses: { exports: 'a lot' } })] },
+      { models: [model({ addsUses: [500] })] },
+      { models: [model({ meters: 'exports' })] },
+      { models: [model({ meters: [{ uses: 5, resets: 'never', offline: null }] })] },
+      { meters: [{ code: 5, name: 'Exports' }] },
+    ]
+    for (const change of odd) {
+      const body = { products: [{ ...metered.products[0], ...change }] }
+      const res = await harness({ answers: [{ status: 200, body }] }).run('products')
+      expect([change, res.code]).toEqual([change, EXIT.unavailable])
+    }
+  })
+})
+
 describe('keygrant licenses test', () => {
   it('makes a valid test license unless told, with an idempotency key, and prints the key then the license', async () => {
     const made = { key: 'SLUICE-TEST-AAAA-BBBB-CCCC', scenario: 'valid', license: license({ key: 'SLUICE-TEST-AAAA-BBBB-CCCC', test: true }) }

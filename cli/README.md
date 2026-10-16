@@ -1,8 +1,9 @@
 # keygrant
 
 The `keygrant` command works with [KeyGrant](https://keygrant.dev) licenses from a terminal or a build
-pipeline: issue, find and change licenses, make test licenses, report a release, fetch a product's public
-keys, save a key's license file or key file, and verify a lease, a license file or a key file offline.
+pipeline: issue, find and change licenses, show and change what a license counts (its meters), spend a
+meter from your backend, make test licenses, report a release, fetch a product's public keys, save a key's
+license file or key file, and verify a lease, a license file or a key file offline.
 
 ```sh
 npx @keygrant/cli --help
@@ -43,6 +44,9 @@ only; a release needs a `kg_live_` key.
 | `keygrant licenses device-limit <key> <n>` | Set how many devices it may be active on |
 | `keygrant licenses seat-release <key> <days\|off>` | Set how many days an unused device keeps its seat before it is freed, or `off` |
 | `keygrant licenses file <key> [--out <path>] [--force] [--resign]` | Save the key's license file or key file (a `.kglicense`), for a license model that delivers a file |
+| `keygrant licenses meters <key>` | What the license counts: each meter's uses left, total, used, offline allowance and period |
+| `keygrant licenses uses <key> <meter> --add <n>` (or `--set <n>`, `--offline <n\|default>`, `--reset`) | Add uses to a meter, set its uses or its offline allowance, or start a new period |
+| `keygrant licenses use <key> <meter> [n] [--id <id>]` | Spend a meter from your backend |
 | `keygrant licenses revoke <key> [--reason <reason>]` | Revoke it |
 | `keygrant licenses free-device <key> <activation id>` | Free one device |
 | `keygrant licenses test --product <id> --scenario <state>` | A test license: `valid`, `trial-ending`, `expired`, `revoked` or `device-limit` |
@@ -71,7 +75,42 @@ keygrant licenses file MYAPP-AAAA-BBBB-CCCC-DDDD --out ./files/ada.kglicense
 # Check a license file or key file a buyer was sent, offline: its kind, product, licensee, versions,
 # file id and the key that signed it (the key set must hold every key that ever signed a file)
 keygrant verify ./my-app-license.kglicense --key src/keygrant-keys.json --product my-app
+
+# Give a customer 500 more exports, once, however often the command runs
+keygrant licenses uses MYAPP-AAAA-BBBB-CCCC-DDDD exports --add 500 --idempotency-key support-ticket-4812
+
+# Spend 3 renders for a customer from your own server, once per render
+keygrant licenses use MYAPP-AAAA-BBBB-CCCC-DDDD renders 3 --id render-9f2c1a77-0001
 ```
+
+## Metered licenses
+
+A license model can count uses of what it sells: 1,000 exports for good, or 50 renders each month a
+subscription is paid. Each thing counted is a **meter**, with a code your app passes to `use()`. Your app
+spends its own meters through the SDK; the command line is for you.
+
+- `keygrant licenses meters <key>` prints each meter of a license: what is **left**, the **total** (the uses
+  it holds, added ones included), what is **used** and what was **added** on top, the **offline** allowance
+  a device may spend while KeyGrant cannot be reached (`(default)` when the key sets none of its own), when
+  it **resets** (`never`, or each billing period and where this one ends), and the **overage** (spent past
+  the total, which only reports from offline can make) when any meter has some. `keygrant licenses get` shows
+  the same in a line, and `keygrant products` lists a product's meters, what each model counts (`exports
+  1,000`, `renders 50 a period`) and the uses a top-up adds (`+500 exports`).
+- `keygrant licenses uses <key> <meter>` changes one meter with exactly one of `--add <n>` (more uses on
+  top of the key's own, a top-up by hand), `--set <n>` (the key's own uses; a meter the key lacks but its
+  product has is added), `--offline <n|default>` (the most a device may spend with no answer from KeyGrant)
+  and `--reset` (a new period now, on a meter that comes back each billing period). `--add` and `--reset`
+  send an idempotency key, one made for each run or yours with `--idempotency-key`, so running the same
+  command again with the same key changes nothing more; when one of them fails in a way that may have gone
+  through all the same (exit 5), the error names the key it made. A set is its own retry. The app sees a
+  change at its next check-in.
+- `keygrant licenses use <key> <meter> [n]` spends `n` uses (1 by default) from your own backend, a cloud
+  render the key pays for: your secret key is the proof, so no device is asked. It is exact and whole or
+  none: when fewer than `n` are left it exits 1 with `used-up` and how many are. `--id` is the spend's id
+  (16 to 64 letters, digits, hyphens and underscores), one made for each run otherwise: the same id again
+  answers as the first spend did and spends nothing more, and an error that may have spent all the same
+  (exit 5) names the id it made. It prints the spend's id, which `--json` does not.
+- `keygrant verify` prints a lease's meters, what was left of each when the lease was signed.
 
 ## License files and key files
 

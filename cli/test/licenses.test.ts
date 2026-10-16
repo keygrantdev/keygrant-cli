@@ -313,7 +313,7 @@ describe('licenses extend', () => {
 
   it('passes on the API refusing a --to that would shorten it, or a revoked key', async () => {
     const res = await harness({ answers: [{ status: 409, body: { error: 'license-revoked' } }] }).run('licenses', 'extend', KEY, '--to', '2027-01-31')
-    expect(res).toMatchObject({ code: EXIT.refused, err: 'keygrant: license-revoked: the key is revoked (it cannot be extended, and no file is made for it)' })
+    expect(res).toMatchObject({ code: EXIT.refused, err: 'keygrant: license-revoked: the key is revoked (it cannot be extended or spent from, and no file is made for it)' })
   })
 
   it('reads --days and --to before asking anything, so a bad one is a usage error with no key and no network', async () => {

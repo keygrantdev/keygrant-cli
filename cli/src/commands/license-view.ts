@@ -1,5 +1,6 @@
 import { DEFAULT_TTL_SECONDS, LICENSE_MODELS } from '@keygrant/shared'
 import { entitlementsText, fields, majorsText, table, when } from '../output.js'
+import { metersLine, type Meters } from './meter-view.js'
 
 /** A license as the tenant API answers it (only what the CLI prints is named). */
 export interface License {
@@ -29,6 +30,8 @@ export interface License {
   versions: { minMajor: number; maxMajor: number | null; upgradeUntil: number | null }
   versionRule: string | null
   entitlements: Record<string, unknown>
+  /** What it counts, by meter code (`{}` for none); absent from a KeyGrant that predates meters. */
+  meters?: Meters
   sale?: { id: string; index: number; size: number }
 }
 
@@ -91,6 +94,7 @@ export function licenseBlock(l: License, now: number): string {
     ['Offline days', offlineDays(l)],
     ['Versions', l.versionRule ? `bound by its first activation (${l.versionRule.replace('_', ' ')})` : majorsText(l.versions, now)],
     ['Entitlements', entitlementsText(l.entitlements)],
+    ['Meters', metersLine(l.meters)],
     ['Sale', l.sale ? `key ${l.sale.index} of ${l.sale.size} (${l.sale.id})` : null],
     ['Created', when(l.createdAt)],
     ['Revoked', l.revokedAt ? when(l.revokedAt) : null],

@@ -9,21 +9,36 @@ const DAY_MS = 86_400_000
 const TYPES = ['perpetual', 'subscription', 'trial', 'timed']
 const REASONS = ['refund', 'chargeback', 'subscription_canceled', 'manual']
 
+/** What a request that carries a key says when it fails in a way that may have done its work all the same. */
+export interface Retry {
+  /** What may have happened: "it may have been made all the same". */
+  may: string
+  /** What running the command again with the key gets: "to get it rather than make another". */
+  rather: string
+  /** The option that takes the key, and the member of the `--json` error that names it. */
+  flag: string
+  field: string
+}
+
+/** A request that mints: its key is the `--idempotency-key`. */
+const MINTS: Retry = { may: 'it may have been made all the same', rather: 'to get it rather than make another', flag: '--idempotency-key', field: 'idempotencyKey' }
+
 /**
- * A request that mints, sent with an idempotency key: the one asked for, else
- * one made for this run, so its own retry never mints twice. When it fails in a
- * way that may have minted all the same (KeyGrant unreachable, or failing), and
- * the key was the run's own, the error names it, so the license can be asked
- * for again with it rather than a second one made.
+ * A request that mints (or, with `retry`, adds or spends), sent with a key: the
+ * one asked for, else one made for this run, so its own retry never does the
+ * work twice. When it fails in a way that may have done it all the same
+ * (KeyGrant unreachable, or failing), and the key was the run's own, the error
+ * names it, so the work can be asked for again with it rather than done a
+ * second time.
  */
-export async function minting(ctx: Context, given: string | undefined, send: (idempotencyKey: string) => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
+export async function minting<T>(ctx: Context, given: string | undefined, send: (idempotencyKey: string) => Promise<T>, retry: Retry = MINTS): Promise<T> {
   const key = given ?? `cli-${ctx.deps.randomId()}`
   try {
     return await send(key)
   } catch (error) {
     if (given !== undefined || !(error instanceof CliError) || error.exit !== EXIT.unavailable) throw error
-    const again = `it may have been made all the same: run the command again with --idempotency-key ${key} to get it rather than make another`
-    throw new CliError(error.exit, `${error.message}; ${again}`, { ...error.json, idempotencyKey: key })
+    const again = `${retry.may}: run the command again with ${retry.flag} ${key} ${retry.rather}`
+    throw new CliError(error.exit, `${error.message}; ${again}`, { ...error.json, [retry.field]: key })
   }
 }
 

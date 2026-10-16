@@ -15,6 +15,7 @@ const vectors = JSON.parse(readFileSync(new URL('../../conformance/vectors.json'
   publicJwk: JsonWebKey
   leases: VerifyVector[]
   keySets: (VerifyVector & { keys: JsonWebKey[] })[]
+  meterLeases: VerifyVector[]
 }
 
 const SET = { publicJwk: { kty: 'OKP', crv: 'Ed25519', x: 'A' }, keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'A', kid: 'k1' }, { kty: 'OKP', crv: 'Ed25519', x: 'B', kid: 'k2' }] }
@@ -64,6 +65,13 @@ describe('keygrant verify, as every SDK verifies', () => {
   it('answers each key set vector by the key the lease names', async () => {
     for (const v of vectors.keySets) {
       const res = await run(v.token, { keys: v.keys }, v.now)
+      expect([v.name, res.code, JSON.parse(res.out)]).toEqual([v.name, v.verify.valid ? EXIT.ok : EXIT.refused, v.verify])
+    }
+  })
+
+  it('answers each lease vector that carries meters as the reference verifier does, the claim read as every SDK reads it', async () => {
+    for (const v of vectors.meterLeases) {
+      const res = await run(v.token, vectors.publicJwk, v.now)
       expect([v.name, res.code, JSON.parse(res.out)]).toEqual([v.name, v.verify.valid ? EXIT.ok : EXIT.refused, v.verify])
     }
   })
@@ -118,6 +126,24 @@ describe('keygrant verify, as every SDK verifies', () => {
     expect(await shown((c) => c.test === true)).toContain('Test          yes: a test license')
     expect(await shown((c) => c.minMajor === 2)).toContain('Majors        2 to 3')
     expect(await shown((c) => Object.keys(c.ent as object).length === 3)).toContain('Entitlements  pro=true, seats=5, tier=gold')
+  })
+
+  it('prints the meters a lease carries and what was left of each, and nothing for a lease with none', async () => {
+    const shown = async (name: string) => {
+      const v = vectors.meterLeases.find((l) => l.name === name)
+      if (!v) throw new Error(`no meter lease vector named "${name}"`)
+      return (await harness({ env: {}, files: { 'k.json': JSON.stringify(vectors.publicJwk) } }).run('verify', v.token, '--key', 'k.json', '--at', String(v.now))).out
+    }
+    expect(await shown('a lease with two meters, one that resets')).toContain(
+      'Meters        exports 90 of 100 left, 10 offline a device; renders 5 of 5 left, 0 offline a device (each period)\n',
+    )
+    expect(await shown('a lease with one meter')).toMatch(/^Meters {8}exports 90 of 100 left, 10 offline a device$/m)
+    expect(await shown('a lease with no met: unchanged')).not.toContain('Meters')
+    expect(await shown('met an empty object')).not.toContain('Meters')
+    // A meter named as an object's prototype is a meter all the same.
+    expect(await shown('a meter named __proto__')).toContain('__proto__ 1 of 2 left, 0 offline a device')
+    // An expired lease still shows what it carried.
+    expect(await shown('an expired lease with meters: the claims are still returned')).toContain('exports 90 of 100 left')
   })
 
   it('prints a single major as itself, and a device bound by a claim of no kind as such', async () => {

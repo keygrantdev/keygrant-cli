@@ -128,7 +128,7 @@ describe('keygrant licenses file', () => {
 
   it('names each reason the API has no file to give, exit 1, and writes nothing', async () => {
     const reasons: [number, string, string][] = [
-      [409, 'license-revoked', 'the key is revoked (it cannot be extended, and no file is made for it)'],
+      [409, 'license-revoked', 'the key is revoked (it cannot be extended or spent from, and no file is made for it)'],
       [409, 'not-a-file-license', 'the key is delivered as a typed key, not as a file (the delivery of its license model says which)'],
       [409, 'no-licensee', 'the key has no email address to license a file to'],
       [409, 'license-expires', 'an offline license file never expires, so none is made for a key that ends (a file that carries the key can be made for a key that ends)'],
