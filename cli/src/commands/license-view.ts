@@ -24,6 +24,13 @@ export interface License {
   graceDays?: number
   /** Days an unused device keeps its seat before the nightly pass frees it; null for never. */
   seatReleaseDays?: number | null
+  /**
+   * Who may activate a NEW device on it, as stored: 'off', 'email' or 'code' (integration.md section 18); absent
+   * from a KeyGrant that predates user-locked keys.
+   */
+  userLock?: string
+  /** How it was delivered: 'key' (typed), 'key_file' or 'license_file' (integration.md section 17); absent from a KeyGrant that predates files. */
+  delivery?: string
   createdAt: number
   revokedAt: number | null
   revokedReason: string | null
@@ -71,6 +78,39 @@ function unusedSeats(l: License): string | null {
   return l.seatReleaseDays === null ? 'kept' : `freed after ${days(l.seatReleaseDays)} unseen`
 }
 
+/**
+ * A lock in the dashboard's words (keygrant-web `lib/user-lock.ts`): `anyone with the key`, `only the buyer, by
+ * email`, `only the buyer, by email and code`; a lock this version does not know, as KeyGrant named it.
+ */
+export function userLockText(lock: string): string {
+  if (lock === 'off') return 'anyone with the key'
+  if (lock === 'email') return 'only the buyer, by email'
+  return lock === 'code' ? 'only the buyer, by email and code' : lock
+}
+
+/**
+ * Who can activate a new device on it, and, for a lock the worker does not ask (`activationLock`: a test license, or a
+ * key with no email to compare with), why anyone can all the same; nothing from a KeyGrant that does not say.
+ */
+function whoCanActivate(l: License): string | null {
+  if (l.userLock === undefined) return null
+  const said = userLockText(l.userLock)
+  if (l.userLock === 'off') return said
+  if (l.test) return `${said}, but a test license is never locked, so anyone`
+  return (l.email ?? '').trim() === '' ? `${said}, but this key has no email, so anyone` : said
+}
+
+/**
+ * How a key is delivered, in the dashboard's words (keygrant-web `lib/license-delivery.ts`): `typed key`, `key file`,
+ * `license file` (offline for good, the trade its model states); a delivery this version does not know, as KeyGrant
+ * named it.
+ */
+export function deliveryText(delivery: string): string {
+  if (delivery === 'key') return 'typed key'
+  if (delivery === 'key_file') return 'key file'
+  return delivery === 'license_file' ? 'license file, offline for good' : delivery
+}
+
 /** What it is now: its kind, and why when it was revoked or cancelled; marked when it is a test license. */
 function state(l: License): string {
   const why = l.revokedReason ? ` (${l.revokedReason.replace(/_/g, ' ')})` : ''
@@ -86,6 +126,8 @@ export function licenseBlock(l: License, now: number): string {
     ['Model', model],
     ['State', state(l)],
     ['Email', l.email],
+    ['Who can activate', whoCanActivate(l)],
+    ['Delivered as', l.delivery === undefined ? null : deliveryText(l.delivery)],
     ['Expires', ends(l)],
     ['Valid until', l.validUntil === l.expiresAt ? null : when(l.validUntil)],
     ['Grace', l.graceDays === undefined ? null : l.graceDays ? days(l.graceDays) : 'none'],

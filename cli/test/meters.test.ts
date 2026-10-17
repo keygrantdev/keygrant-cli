@@ -77,7 +77,7 @@ describe('keygrant licenses meters', () => {
 describe('a license in full', () => {
   it('shows its meters in a line each command that prints a license in full uses, and none when it has none', async () => {
     const withMeters = await harness({ answers: [{ status: 200, body: metered(TWO) }] }).run('licenses', 'get', KEY)
-    expect(withMeters.out).toContain('Meters        exports 550 of 1,500 left; renders 0 of 50 left, 5 over (each period)\n')
+    expect(withMeters.out).toContain('Meters            exports 550 of 1,500 left; renders 0 of 50 left, 5 over (each period)\n')
     for (const body of [metered({}), { license: license() }]) {
       expect((await harness({ answers: [{ status: 200, body }] }).run('licenses', 'get', KEY)).out).not.toContain('Meters')
     }
@@ -116,8 +116,8 @@ describe('keygrant licenses uses', () => {
     const res = await h.run('licenses', 'uses', KEY, 'exports', '--add', '500')
     expect(request(h.calls[0])).toMatchObject({ method: 'POST', url: `${METERS_URL}/exports/add`, body: { uses: 500 }, headers: expect.objectContaining({ 'idempotency-key': 'cli-run-1' }) })
     expect(res.code).toBe(EXIT.ok)
-    expect(res.out.split('\n').slice(0, 3)).toEqual(['Added 500 uses to exports: 1,050 of 2,000 left.', '', `Key           ${KEY}`])
-    expect(res.out).toContain('Meters        exports 1,050 of 2,000 left')
+    expect(res.out.split('\n').slice(0, 3)).toEqual(['Added 500 uses to exports: 1,050 of 2,000 left.', '', `Key               ${KEY}`])
+    expect(res.out).toContain('Meters            exports 1,050 of 2,000 left')
   })
 
   it('sends the idempotency key asked for, so a retry by hand adds nothing more', async () => {
@@ -163,6 +163,54 @@ describe('keygrant licenses uses', () => {
     expect(res.out.split('\n')[0]).toBe('Reset renders, a new period begins: 50 of 50 left.')
   })
 
+  it('sets whether a meter comes back each billing period, any case, as a set that is its own retry', async () => {
+    const h = harness({
+      answers: [
+        { status: 200, body: metered({ renders: meter({ uses: 50, extra: 0, used: 0, left: 50, resets: 'period' }) }) },
+        { status: 200, body: metered({ renders: meter({ uses: 50, extra: 0, used: 0, left: 50, resets: 'never' }) }) },
+      ],
+    })
+    const period = await h.run('licenses', 'uses', KEY, 'renders', '--resets', ' Period ')
+    const never = await h.run('licenses', 'uses', KEY, 'renders', '--resets', 'never')
+    expect(h.calls.map((c) => [c.method, c.url, c.body, c.headers['idempotency-key']])).toEqual([
+      ['POST', `${METERS_URL}/renders`, { resets: 'period' }, undefined],
+      ['POST', `${METERS_URL}/renders`, { resets: 'never' }, undefined],
+    ])
+    expect(period.out.split('\n')[0]).toBe('Set renders to come back each billing period: 50 of 50 left.')
+    expect(never.out.split('\n')[0]).toBe('Set renders to be used up for good, never reset: 50 of 50 left.')
+    const refused = await harness({ answers: [{ status: 400, body: { error: 'meter-period-subscription-only' } }] }).run('licenses', 'uses', KEY, 'renders', '--resets', 'period')
+    expect(refused).toEqual({
+      code: EXIT.refused,
+      out: '',
+      err: 'keygrant: meter-period-subscription-only: a meter that comes back each billing period is for a subscription key only',
+    })
+  })
+
+  it('removes a meter from the key with a DELETE, prints the license as it now stands, and names one the key does not hold', async () => {
+    const h = harness({ answers: [{ status: 200, body: metered({ renders: meter({ uses: 50, extra: 0, used: 0, left: 50, resets: 'period' }) }) }] })
+    const res = await h.run('licenses', 'uses', KEY, 'exports', '--remove')
+    expect(request(h.calls[0])).toMatchObject({ method: 'DELETE', url: `${METERS_URL}/exports`, body: undefined })
+    expect(h.calls[0]?.headers['idempotency-key']).toBeUndefined()
+    expect(res.out.split('\n').slice(0, 3)).toEqual([
+      "Removed exports from the key: the uses added on top and the count of what was spent are gone, and adding it back starts it unused. Offline spends a device reports while the meter is off the key are not counted, and the app's use() of it is refused as no-meter.",
+      '',
+      `Key               ${KEY}`,
+    ])
+    expect(res.out).toContain('Meters            renders 50 of 50 left (each period)')
+    const answer = metered({})
+    const json = await harness({ answers: [{ status: 200, body: answer }] }).run('licenses', 'uses', KEY, 'exports', '--remove', '--json')
+    expect(JSON.parse(json.out)).toEqual(answer)
+    const missing = await harness({ answers: [{ status: 404, body: { error: 'unknown-meter' } }] }).run('licenses', 'uses', KEY, 'gems', '--remove', '--json')
+    expect([missing.code, JSON.parse(missing.err)]).toEqual([EXIT.refused, { error: 'unknown-meter', status: 404 }])
+    // Said for a removal (a meter never held, or one a removal run again finds gone), not as an add or a set is.
+    const twice = await harness({ answers: [{ status: 404, body: { error: 'unknown-meter' } }] }).run('licenses', 'uses', KEY, 'exports', '--remove')
+    expect(twice).toEqual({
+      code: EXIT.refused,
+      out: '',
+      err: 'keygrant: unknown-meter: the key holds no meter with that code, so there is none to remove (`keygrant licenses meters <key>` lists its meters)',
+    })
+  })
+
   it('says what it did when the answer does not name the meter, and prints the API answer under --json', async () => {
     const bare = await harness({ answers: [{ status: 200, body: { license: license() } }] }).run('licenses', 'uses', KEY, 'exports', '--add', '5')
     expect(bare.out.split('\n')[0]).toBe('Added 5 uses to exports.')
@@ -188,17 +236,22 @@ describe('keygrant licenses uses', () => {
 
   it('refuses what it can tell is wrong before sending anything', async () => {
     const refusals: [string[], string][] = [
-      [[KEY, 'exports'], 'give one of --add <n>, --set <n>, --offline <n|default> and --reset'],
-      [[KEY, 'exports', '--add', '5', '--set', '5'], 'give one of --add <n>, --set <n>, --offline <n|default> and --reset'],
-      [[KEY, 'exports', '--reset', '--offline', 'default'], 'give one of --add <n>, --set <n>, --offline <n|default> and --reset'],
+      [[KEY, 'exports'], 'give one of --add <n>, --set <n>, --offline <n|default>, --resets <never|period>, --reset and --remove'],
+      [[KEY, 'exports', '--add', '5', '--set', '5'], 'give one of --add <n>, --set <n>, --offline <n|default>, --resets <never|period>, --reset and --remove'],
+      [[KEY, 'exports', '--reset', '--offline', 'default'], 'give one of --add <n>, --set <n>, --offline <n|default>, --resets <never|period>, --reset and --remove'],
       [[KEY, 'exports', '--add', '0'], '--add must be from 1 to 1,000,000,000'],
       [[KEY, 'exports', '--add', '1000000001'], '--add must be from 1 to 1,000,000,000'],
       [[KEY, 'exports', '--add', '1.5'], '--add must be a whole number, not "1.5"'],
       [[KEY, 'exports', '--set', '-1'], '--set must be from 0 to 1,000,000,000'],
       [[KEY, 'exports', '--offline', 'some'], '--offline must be a whole number, not "some"'],
       [[KEY, 'exports', '--offline', '1000000001'], '--offline must be from 0 to 1,000,000,000'],
-      [[KEY, 'exports', '--set', '5', '--idempotency-key', 'x'], '--idempotency-key applies to --add and --reset: --set and --offline can simply be run again'],
-      [[KEY, 'exports', '--offline', '5', '--idempotency-key', 'x'], '--idempotency-key applies to --add and --reset: --set and --offline can simply be run again'],
+      [[KEY, 'exports', '--set', '5', '--idempotency-key', 'x'], '--idempotency-key applies to --add and --reset only'],
+      [[KEY, 'exports', '--offline', '5', '--idempotency-key', 'x'], '--idempotency-key applies to --add and --reset only'],
+      [[KEY, 'exports', '--resets', 'period', '--idempotency-key', 'x'], '--idempotency-key applies to --add and --reset only'],
+      [[KEY, 'exports', '--remove', '--idempotency-key', 'x'], '--idempotency-key applies to --add and --reset only'],
+      [[KEY, 'exports', '--resets', 'monthly'], '--resets must be never or period, not "monthly"'],
+      [[KEY, 'exports', '--remove', '--set', '5'], 'give one of --add <n>, --set <n>, --offline <n|default>, --resets <never|period>, --reset and --remove'],
+      [[KEY, 'exports', '--resets', 'never', '--reset'], 'give one of --add <n>, --set <n>, --offline <n|default>, --resets <never|period>, --reset and --remove'],
       [[KEY, 'exports', '--add', '5', '--idempotency-key', ' x'], '--idempotency-key must be 1 to 255 visible ASCII characters, with no space at either end'],
       [[KEY], 'missing the meter code'],
       [[], 'missing the license key'],
@@ -215,7 +268,7 @@ describe('keygrant licenses uses', () => {
 
   it('names what KeyGrant refused in a sentence', async () => {
     const refused: [number, Record<string, unknown>, string, string][] = [
-      [404, { error: 'unknown-meter' }, '--add', "unknown-meter: the key holds no meter with that code, and the product has none to add to it with --set (`keygrant licenses meters <key>` lists a key's meters, `keygrant products` a product's)"],
+      [404, { error: 'unknown-meter' }, '--add', "unknown-meter: the key holds no meter with that code (`keygrant licenses meters <key>` lists a key's meters, and `keygrant licenses uses <key> <meter> --set <n>` adds one of its product's)"],
       [409, { error: 'meter-not-periodic' }, '--reset', 'meter-not-periodic: the meter does not come back each billing period, so there is no period to reset'],
       [400, { error: 'over-cap' }, '--add', 'over-cap: that would take the meter past the most uses one may count (1,000,000,000)'],
       [409, { error: 'idempotency-key-reused' }, '--add', 'idempotency-key-reused: that idempotency key was first used for another request'],
@@ -337,7 +390,7 @@ describe('keygrant licenses use', () => {
     const refused: [number, string, string][] = [
       [409, 'license-revoked', 'the key is revoked (it cannot be extended or spent from, and no file is made for it)'],
       [409, 'license-expired', 'the key has expired, so nothing is spent from it'],
-      [404, 'unknown-meter', "the key holds no meter with that code, and the product has none to add to it with --set (`keygrant licenses meters <key>` lists a key's meters, `keygrant products` a product's)"],
+      [404, 'unknown-meter', "the key holds no meter with that code (`keygrant licenses meters <key>` lists a key's meters, and `keygrant licenses uses <key> <meter> --set <n>` adds one of its product's)"],
       [404, 'unknown-license', 'no license of yours has that key (a kg_test_ key reaches test licenses only)'],
     ]
     for (const [status, error, said] of refused) {
@@ -402,11 +455,14 @@ describe('the help', () => {
     for (const name of ['licenses meters', 'licenses uses', 'licenses use']) expect(main.out).toContain(`  ${name} `)
     for (const [name, usage] of [
       ['meters', 'keygrant licenses meters <key>'],
-      ['uses', 'keygrant licenses uses <key> <meter> (--add <n> | --set <n> | --offline <n|default> | --reset) [--idempotency-key <key>]'],
+      ['uses', 'keygrant licenses uses <key> <meter> (--add <n> | --set <n> | --offline <n|default> | --resets <never|period>'],
       ['use', 'keygrant licenses use <key> <meter> [n] [--id <id>]'],
     ]) {
       const res = await harness().run('licenses', name as string, '--help')
       expect(res.out).toContain(`Usage: ${usage}`)
     }
+    expect((await harness().run('licenses', 'uses', '--help')).out).toContain('\n                                         | --reset | --remove) [--idempotency-key <key>]\n')
+    const issue = (await harness().run('licenses', 'issue', '--help')).out
+    for (const option of ['  --meter <code=uses,...> ', '  --no-meters ']) expect(issue).toContain(option)
   })
 })

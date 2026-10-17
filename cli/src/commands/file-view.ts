@@ -7,7 +7,7 @@ import {
   type LicenseFileClaims,
   type VerifyingKey,
 } from '@keygrant/shared'
-import { entitlementsText, fields, when } from '../output.js'
+import { entitlementsText, fields, printable, when } from '../output.js'
 
 /**
  * `keygrant verify` of a license file or a key file (sdk-contract.md section
@@ -107,6 +107,7 @@ export function fileFields(c: LicenseFileClaims, kid: string | undefined): strin
 export function fileHead(verdict: FileVerdict): string {
   if (verdict.valid) return verdict.claims.kind === 'key' ? 'Valid key file.' : 'Valid license file.'
   // The key is what these two are about; for the others it is noise.
-  const named = verdict.kid !== undefined && ['unknown-key', 'bad-signature'].includes(verdict.reason) ? ` It names the signing key ${verdict.kid}.` : ''
+  // The key id is the file's own, from its unsigned header: shown printable, so a line break in it cannot add a line.
+  const named = verdict.kid !== undefined && ['unknown-key', 'bad-signature'].includes(verdict.reason) ? ` It names the signing key ${printable(verdict.kid)}.` : ''
   return `Not valid: ${verdict.reason}: ${FILE_REASONS[verdict.reason] ?? verdict.reason}.${named}`
 }

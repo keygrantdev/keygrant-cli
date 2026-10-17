@@ -1,6 +1,6 @@
 {
   "name": "@keygrant/cli",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "The keygrant command: issue, find and change KeyGrant licenses and their meters, report releases, fetch a product's public keys, save license files and verify leases and license files offline.",
   "license": "MIT",
   "author": "KeyGrant",
@@ -32,6 +32,7 @@
     "build": "node scripts/build.mjs",
     "prepack": "node scripts/build.mjs",
     "check:package": "node scripts/check-package.mjs",
+    "build:binary": "node scripts/build-binary.mjs",
     "prepublishOnly": "node scripts/check-package.mjs"
   },
   "dependencies": {
@@ -44,6 +45,7 @@
     "@keygrant/shared": "workspace:*",
     "@types/node": "22.20.4",
     "esbuild": "^0.25.12",
+    "postject": "1.0.0-alpha.6",
     "typescript": "^5.9.3"
   },
   "repository": {

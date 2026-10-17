@@ -4,7 +4,7 @@ import { emit, positionals, segment, type Command } from '../command.js'
 import { CliError, EXIT } from '../errors.js'
 import { entitlementsText, table } from '../output.js'
 import { idempotencyKeyOf, minting } from './licenses-write.js'
-import { licenseBlock, termText, type License } from './license-view.js'
+import { deliveryText, licenseBlock, termText, userLockText, type License } from './license-view.js'
 import { modelMetersText, productMetersText, type ModelMeter, type ProductMeter } from './meter-view.js'
 
 /** A license model as `GET /v1/products` answers it (only what the CLI prints is named). */
@@ -20,6 +20,10 @@ interface Model {
   /** What its keys count, and the uses one unit of a top-up adds; absent from a KeyGrant that predates meters. */
   meters?: ModelMeter[]
   addsUses?: Record<string, number>
+  /** Who may activate a new device on its keys: 'off', 'email' or 'code'; absent from a KeyGrant that predates user-locked keys. */
+  userLock?: string
+  /** How its keys are delivered: 'key', 'key_file' or 'license_file'; absent from a KeyGrant that predates files. */
+  delivery?: string
   termLength: number | null
   termUnit: 'days' | 'months' | null
   endsAt: number | null
@@ -41,6 +45,18 @@ function modelKind(m: Model): string {
   if (m.addsDevices > 0) return 'device upgrade'
   if (Object.keys(m.addsUses ?? {}).length > 0) return 'uses upgrade'
   if (m.upgradesExisting) return `${m.type} upgrade`
+  return `${keyKind(m)}${sentAs(m.delivery)}`
+}
+
+/** A model's keys sent as a file, said after its kind (`, as a key file`); nothing for a typed key or a KeyGrant that does not say. */
+function sentAs(delivery: string | undefined): string {
+  if (delivery === undefined || delivery === 'key') return ''
+  if (delivery === 'key_file') return ', as a key file'
+  return delivery === 'license_file' ? ', as a license file' : `, as ${deliveryText(delivery)}`
+}
+
+/** A model that issues keys: its type, and a timed model's term or end date. */
+function keyKind(m: Model): string {
   if (m.type === 'timed' && m.termLength && m.termUnit) {
     return `timed, ${termText(m.termUnit === 'months' ? { months: m.termLength, days: 0 } : { months: 0, days: m.termLength })}`
   }
@@ -56,10 +72,12 @@ export const products: Command = {
   --product <id>   one product, by its API ID
 
 Prints each product (its API ID, key prefix and current version) with the meters its apps spend
-and its license models' ids, which --model takes. A model that counts uses shows its meters (the
+and its license models' ids, which --model takes. A model whose keys are sent as a file says so
+after what it sells (as a key file, as a license file). A model that counts uses shows its meters (the
 code, its uses, "a period" when they come back each billing period, and its own offline allowance),
-and a top-up the uses a unit adds (+500 exports). --json prints the API's answer, { "products": [ ... ] }, with --product
-only that product in it.`,
+and a top-up the uses a unit adds (+500 exports). When a model locks who can activate its keys,
+a column says who can, for each model. --json prints the API's answer, { "products": [ ... ] },
+with --product only that product in it.`,
   options: { product: { type: 'value' } },
   async run(ctx, args) {
     positionals(args)
@@ -77,6 +95,8 @@ only that product in it.`,
           if (!p.models.length) return `${head}\n  no license models`
           // The column is there when a model of the product counts uses, so a product without meters prints as it did.
           const metered = p.models.some((m) => modelMetersText(m.meters, m.addsUses) !== '')
+          // So is this one when a model locks who can activate its keys.
+          const locked = p.models.some((m) => m.userLock !== undefined && m.userLock !== 'off')
           const rows = p.models.map((m) => [
             m.id,
             m.name,
@@ -84,9 +104,10 @@ only that product in it.`,
             String(m.deviceLimit),
             entitlementsText(m.entitlements),
             ...(metered ? [modelMetersText(m.meters, m.addsUses)] : []),
+            ...(locked ? [userLockText(m.userLock ?? 'off')] : []),
             m.archived ? 'archived' : '',
           ])
-          const header = ['MODEL', 'NAME', 'SELLS', 'DEVICES', 'ENTITLEMENTS', ...(metered ? ['METERS'] : []), '']
+          const header = ['MODEL', 'NAME', 'SELLS', 'DEVICES', 'ENTITLEMENTS', ...(metered ? ['METERS'] : []), ...(locked ? ['WHO CAN ACTIVATE'] : []), '']
           return `${head}\n${table(header, rows).replace(/^/gm, '  ')}`
         })
         .join('\n\n')
@@ -94,7 +115,8 @@ only that product in it.`,
   },
 }
 
-const SCENARIOS = ['valid', 'trial-ending', 'expired', 'revoked', 'device-limit']
+/** The states a test license can be made in, as the worker names them (its TEST_SCENARIOS; the contract test holds the two together). */
+export const SCENARIOS: readonly string[] = ['valid', 'trial-ending', 'expired', 'revoked', 'device-limit', 'used-up']
 
 export const testLicense: Command = {
   name: 'licenses test',
@@ -102,15 +124,16 @@ export const testLicense: Command = {
   help: `keygrant licenses test --product <id> [--scenario <state>] [--model <model id>] [--version <version>]
                        [--idempotency-key <key>]
 
-  --scenario <state>       valid (the default), trial-ending, expired, revoked or device-limit
+  --scenario <state>       valid (the default), trial-ending, expired, revoked, device-limit or used-up
   --model <model id>       its license model, else the product's first that issues keys (trial-ending
-                           always takes the product's trial model)
+                           always takes the product's trial model; used-up the first of them that counts uses)
   --version <version>      the version it is for; else its first activation's
   --idempotency-key <key>  the same key on a retry answers the license first made
 
 As the dashboard's Create test license: signed with the product's real key and marked as a
 test, so it works in the build you ship; it lasts 30 days at most, is never emailed, and your
-account holds 25 at once. device-limit fills its one seat, so your machine is refused.
+account holds 25 at once. device-limit fills its one seat, so your machine is refused. used-up
+leaves its first meter nothing, so a spend is refused; a model that counts nothing is no-meters.
 Prints the key on its first line, then the license. --json prints the API's answer,
 { "key", "scenario", "license" }.`,
   options: {

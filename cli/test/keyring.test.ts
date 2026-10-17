@@ -81,6 +81,17 @@ describe('the operating system\'s credential store', () => {
     expect(await reasonOf(noSecretService.set('a', 'k'))).toBe('No Secret Service on this machine')
   })
 
+  it('says a loader\'s own reason when it knows why there is no store, as the single binary\'s does', async () => {
+    const binary = osCredentialStore('win32', () => {
+      throw new StoreUnavailable('this single binary carries no credential store')
+    })
+    for (const work of [binary.get('a'), binary.set('a', 'k'), binary.delete('a')]) {
+      const error = await work.then(() => null, (e: unknown) => e)
+      expect(error).toBeInstanceOf(StoreUnavailable)
+      expect((error as Error).message).toBe('this single binary carries no credential store')
+    }
+  })
+
   it('names the store as each platform calls it', () => {
     expect(storeName('darwin')).toBe('the macOS Keychain')
     expect(storeName('win32')).toBe('the Windows Credential Manager')

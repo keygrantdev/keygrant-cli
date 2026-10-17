@@ -1,7 +1,7 @@
 import { usage, type OptionSpecs, type Parsed } from './args.js'
 import type { Context } from './api.js'
 import type { ExitCode } from './errors.js'
-import { asJson } from './output.js'
+import { asJson, printableLines } from './output.js'
 
 /** One command: its words (`licenses issue`), its help, the options it takes, and what it does. */
 export interface Command {
@@ -13,9 +13,9 @@ export interface Command {
   run(ctx: Context, args: Parsed): Promise<ExitCode | void>
 }
 
-/** Prints for a script (`--json`: the value) or for a person (the text). */
+/** Prints for a script (`--json`: the value) or for a person (the text, each line `printable`). */
 export function emit(ctx: Context, json: unknown, text: () => string): void {
-  ctx.deps.out(ctx.json ? asJson(json) : text())
+  ctx.deps.out(ctx.json ? asJson(json) : printableLines(text()))
 }
 
 /** The command's positionals, exactly `names.length` of them, else a usage error naming the first missing. */

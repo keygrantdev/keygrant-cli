@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0
+
+- The command as one file for each platform (Linux x64 and arm64 with glibc 2.28 or later, so not Alpine, macOS on Apple silicon
+  and Intel, Windows x64),
+  with nothing to install: attached to each release on GitHub with its `.sha256`. It keeps no key, so it reads
+  `KEYGRANT_API_KEY`.
+- `licenses user-lock <key> <off|email|code>` sets who can activate a new device on a key: anyone with the
+  key, only the buyer by the email the key was sold to, or only the buyer by that email and a code KeyGrant
+  emails to it. Devices already activated are never asked. `--json` prints the API's answer. KeyGrant emails
+  no code for a product that sends its own customer email, so use `email` there.
+- A license printed in full says who can activate it, and when its lock is not asked (a test license, or a
+  key with no email), that anyone can. `products` adds a column saying who can activate each model's keys,
+  when any of the product's models locks them. The new row is the longest name, so a printed license's values
+  now start four columns further right (`--json` is unchanged).
+- `licenses test --scenario used-up` makes a test license whose first meter has no uses left.
+- `licenses issue --meter <code=uses,...>` gives a key meters of its own in place of its model's (the uses,
+  then any of `period`, `never` and `offline=<n|default>`), and `--no-meters` gives it none.
+- `licenses uses` takes `--resets <never|period>` (whether a meter comes back each billing period) and
+  `--remove` (takes the meter off the key, discarding its added uses and its count spent; adding it back
+  starts it unused, and the app's `use()` of it is then refused as `no-meter`).
+- `licenses devices <key>` lists the devices a license is active on: each one's activation id (what
+  `licenses free-device` takes), name, platform, app version, last check-in, activation and, when the key
+  frees unused seats, the time after which its seat is freed unless it checks in first (FREED AFTER). It
+  reads KeyGrant's new `GET /v1/licenses/:key/activations`.
+- Everything printed for people, errors included, shows control and direction characters as `?`, and `--json`
+  writes the ones JSON leaves raw as escapes (a script parses the same value), so text an app sends (a
+  device's name, say) cannot move the cursor or rewrite a row in your terminal.
+- A license printed in full says how it was delivered (typed key, key file or license file), and `products`
+  says when a model's keys are sent as a file.
+- `email-required`, `user-lock-license-file`, `user-lock-test-key`, `no-meters` and
+  `license-file-upgrade-protection` are named in a sentence.
+
 ## 0.4.0
 
 - `licenses meters <key>` shows what a license counts: each meter's uses left, total, used and added, its
@@ -16,11 +48,8 @@
 - `license-revoked` is worded for a key that is spent from as well as for one that cannot be extended or
   sent a file; `used-up`, `unknown-meter`, `meter-not-periodic`, `license-expired` and the other meter
   refusals are named in a sentence.
-
-## 0.3.1
-
-- `verify` reads leases that carry meters (the `met` claim a metered license's lease signs). Nothing else
-  changes for its users.
+- `verify` reads leases that carry meters (the `met` claim a metered license's lease signs). This was
+  versioned 0.3.1 and never released on its own.
 
 ## 0.3.0
 

@@ -1,6 +1,7 @@
 import { usage, value, wholeNumber } from '../args.js'
 import { answers, request, secretKey } from '../api.js'
 import { emit, positionals, segment, type Command } from '../command.js'
+import { table, when } from '../output.js'
 import { licenseBlock, licenseTable, type License } from './license-view.js'
 
 const STATUSES = ['all', 'active', 'trial', 'expired', 'revoked']
@@ -18,6 +19,54 @@ Prints the license: its model, state, expiry, devices, versions and entitlements
     const body = await request(ctx, 'GET', `/v1/licenses/${segment(key as string)}`, { key: await secretKey(ctx), expect: answers.license })
     emit(ctx, body, () => licenseBlock(body.license as License, ctx.deps.now()))
   },
+}
+
+/** One device a license is active on, as `GET /v1/licenses/:key/activations` answers it (only what the CLI prints is named). */
+interface Device {
+  id: string
+  name?: string | null
+  platform?: string | null
+  appVersion?: string | null
+  lastSeen?: number | null
+  createdAt: number
+  releaseAt?: number | null
+}
+
+export const devices: Command = {
+  name: 'licenses devices',
+  summary: "List the devices a license is active on, with each one's activation id.",
+  help: `keygrant licenses devices <key>
+
+Prints a table of the devices the license is active on, the most recently seen first: each one's
+activation id (what licenses free-device takes), its name, platform and app version as the app
+reported them (control characters shown as ?), when it last checked in and when it activated, and,
+when the key frees unused seats, the time after which the first nightly pass frees its seat unless it
+checks in first (FREED AFTER). --json prints the API's answer, { "key", "activations": [ ... ] },
+each with the device's fingerprint too.`,
+  options: {},
+  async run(ctx, args) {
+    const [key] = positionals(args, 'the license key')
+    const body = await request(ctx, 'GET', `/v1/licenses/${segment(key as string)}/activations`, { key: await secretKey(ctx), expect: answers.devices })
+    emit(ctx, body, () => devicesTable(body.activations as Device[]))
+  },
+}
+
+/** The devices as a table, the FREED AFTER column there when a seat of them may be freed for going unseen. */
+function devicesTable(list: readonly Device[]): string {
+  if (list.length === 0) return 'No devices: the license is active on none.'
+  const freed = list.some((d) => typeof d.releaseAt === 'number')
+  return table(
+    ['ID', 'NAME', 'PLATFORM', 'APP', 'LAST SEEN', 'ACTIVATED', ...(freed ? ['FREED AFTER'] : [])],
+    list.map((d) => [
+      d.id,
+      d.name ?? '',
+      d.platform ?? '',
+      d.appVersion ?? '',
+      when(d.lastSeen),
+      when(d.createdAt),
+      ...(freed ? [typeof d.releaseAt === 'number' ? when(d.releaseAt) : ''] : []),
+    ]),
+  )
 }
 
 export const list: Command = {

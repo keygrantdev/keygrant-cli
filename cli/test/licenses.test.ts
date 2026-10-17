@@ -100,6 +100,62 @@ describe('licenses issue', () => {
     expect(refused).toEqual({ code: EXIT.refused, out: '', err: 'keygrant: unknown-entitlement: the product\'s catalog has no entitlement "__proto__"' })
   })
 
+  it('gives the key meters of its own from --meter, its period and offline allowance as written, or none with --no-meters', async () => {
+    const issued = async (...args: string[]) => {
+      const h = harness({ answers: [{ status: 201, body: { key: KEY, emailed: false } }] })
+      expect((await h.run('licenses', 'issue', '--product', 'p', '--model', 'mod_pack', ...args)).code).toBe(EXIT.ok)
+      return (h.calls[0]?.body as { meters?: unknown }).meters
+    }
+    expect(await issued('--meter', 'exports=1000', '--meter', ' renders = 50 , PERIOD , offline=5 ', '--meter', 'credits=0,never,offline=Default')).toEqual({
+      exports: { uses: 1000 },
+      renders: { uses: 50, resets: 'period', offline: 5 },
+      credits: { uses: 0, resets: 'never', offline: null },
+    })
+    expect(await issued('--meter', 'exports=1000000000,offline=0')).toEqual({ exports: { uses: 1_000_000_000, offline: 0 } })
+    expect(await issued('--meter', 'exports=5,offline=1000000000')).toEqual({ exports: { uses: 5, offline: 1_000_000_000 } })
+    expect(await issued('--no-meters')).toEqual({})
+    expect(await issued()).toBeUndefined()
+    // A code no object takes as its own still reaches KeyGrant, to be judged there.
+    expect(Object.keys((await issued('--meter', '__proto__=1')) as object)).toEqual(['__proto__'])
+  })
+
+  it('names the meter the product lacks when the API refuses one, as no key exists yet to hold it', async () => {
+    const refused = await harness({ answers: [{ status: 400, body: { error: 'unknown-meter', meter: 'gems' } }] }).run('licenses', 'issue', '--product', 'p', '--model', 'mod_pack', '--meter', 'gems=5')
+    expect(refused).toEqual({ code: EXIT.refused, out: '', err: "keygrant: unknown-meter: the product has no meter \"gems\" (`keygrant products` lists a product's meters)" })
+  })
+
+  it('refuses a meter the API would not take before sending anything', async () => {
+    const refusals: [string[], string][] = [
+      [['--meter', 'exports'], '--meter takes code=uses, then any of period, never and offline=<n|default>, not "exports"'],
+      [['--meter', '=5'], '--meter takes code=uses, then any of period, never and offline=<n|default>, not "=5"'],
+      [['--meter', 'exports='], '--meter takes code=uses, then any of period, never and offline=<n|default>, not "exports="'],
+      [['--meter', 'exports=-1'], 'the uses of --meter exports must be from 0 to 1,000,000,000'],
+      [['--meter', 'exports=1000000001'], 'the uses of --meter exports must be from 0 to 1,000,000,000'],
+      [['--meter', 'exports=lots'], 'the uses of --meter exports must be a whole number, not "lots"'],
+      [['--meter', 'exports=5,monthly'], '--meter exports: "monthly" is not period, never or offline=<n|default>'],
+      [['--meter', 'exports=5,period,never'], '--meter exports: give one of period and never, once'],
+      [['--meter', 'exports=5,offline=1,offline=2'], '--meter exports: offline is given twice'],
+      [['--meter', 'exports=5,offline=some'], 'the offline allowance of --meter exports must be a whole number, not "some"'],
+      [['--meter', 'exports=5,offline=-1'], 'the offline allowance of --meter exports must be from 0 to 1,000,000,000'],
+      [['--meter', 'exports=5,offline=1000000001'], 'the offline allowance of --meter exports must be from 0 to 1,000,000,000'],
+      [['--meter', 'exports=5,'], '--meter exports: an empty part, from a trailing comma'],
+      [['--meter', 'exports=1,000'], '--meter exports: "000" is part of a number: write 1000, not 1,000'],
+      [['--meter', 'exports=5,offline'], '--meter exports: "offline" is not period, never or offline=<n|default>'],
+      [['--meter', 'exports=5,period,period'], '--meter exports: give one of period and never, once'],
+      [['--meter', 'exports=5', '--meter', 'exports=6'], '--meter exports is given twice'],
+      [['--meter', 'exports=5', '--no-meters'], '--meter and --no-meters cannot be given together'],
+    ]
+    for (const [args, said] of refusals) {
+      const h = harness({ env: {} })
+      expect(await h.run('licenses', 'issue', '--product', 'p', '--model', 'mod_pack', ...args)).toEqual({
+        code: EXIT.usage,
+        out: '',
+        err: `keygrant: ${said}\nRun \`keygrant licenses issue --help\`.`,
+      })
+      expect(h.calls).toEqual([])
+    }
+  })
+
   it('names the idempotency key it made when the issue may have minted all the same, so a rerun gets that key', async () => {
     const failed = await harness({ answers: [{ status: 500, body: { error: 'mint-failed' } }] }).run('licenses', 'issue', '--product', 'sluice', '--type', 'perpetual')
     expect(failed.err).toBe(
@@ -153,28 +209,30 @@ describe('licenses issue', () => {
 
 describe('reading licenses', () => {
   it('shows one license, a field per line', async () => {
-    const shown = license({ revokedReason: 'subscription_canceled', revokedAt: NOW, sale: { id: 'sale_1', index: 2, size: 5 }, seatReleaseDays: 30 })
+    const shown = license({ revokedReason: 'subscription_canceled', revokedAt: NOW, sale: { id: 'sale_1', index: 2, size: 5 }, seatReleaseDays: 30, userLock: 'code' })
     const h = harness({ answers: [{ status: 200, body: { license: shown } }] })
     const res = await h.run('licenses', 'get', KEY)
     expect(h.calls[0]).toMatchObject({ method: 'GET', url: `${BASE}/v1/licenses/${KEY}` })
     expect(res.out).toBe(
       [
-        `Key           ${KEY}`,
-        'Product       sluice',
-        'Model         Annual (subscription, mod_annual)',
-        'State         active (subscription canceled)',
-        'Email         jo@example.com',
-        'Expires       2026-10-01 14:13 UTC',
-        'Valid until   2026-10-04 14:13 UTC',
-        'Grace         3 days',
-        'Devices       1 of 3 active',
-        'Unused seats  freed after 30 days unseen',
-        "Offline days  7 days (its type's default)",
-        'Versions      1 and later',
-        'Entitlements  edition=pro',
-        'Sale          key 2 of 5 (sale_1)',
-        'Created       2026-09-20 14:13 UTC',
-        'Revoked       2026-09-21 14:13 UTC',
+        `Key               ${KEY}`,
+        'Product           sluice',
+        'Model             Annual (subscription, mod_annual)',
+        'State             active (subscription canceled)',
+        'Email             jo@example.com',
+        'Who can activate  only the buyer, by email and code',
+        'Delivered as      typed key',
+        'Expires           2026-10-01 14:13 UTC',
+        'Valid until       2026-10-04 14:13 UTC',
+        'Grace             3 days',
+        'Devices           1 of 3 active',
+        'Unused seats      freed after 30 days unseen',
+        "Offline days      7 days (its type's default)",
+        'Versions          1 and later',
+        'Entitlements      edition=pro',
+        'Sale              key 2 of 5 (sale_1)',
+        'Created           2026-09-20 14:13 UTC',
+        'Revoked           2026-09-21 14:13 UTC',
       ].join('\n'),
     )
   })
@@ -189,15 +247,15 @@ describe('reading licenses', () => {
   it('shows a test license, a timed key waiting for its first use, an unbound key and an open upgrade window as such', async () => {
     const waiting = license({ test: true, model: 'timed', expiresAt: null, validUntil: null, term: { months: 12, days: 30 }, versionRule: 'at_purchase', email: null, seats: 3 })
     const res = await harness({ answers: [{ status: 200, body: { license: waiting } }] }).run('licenses', 'get', KEY)
-    expect(res.out).toContain('State         active, test license')
-    expect(res.out).toContain('Expires       12 months and 30 days from its first activation')
-    expect(res.out).toContain('Versions      bound by its first activation (at purchase)')
-    expect(res.out).toContain('Devices       1 of 3 active, 3 seats')
+    expect(res.out).toContain('State             active, test license')
+    expect(res.out).toContain('Expires           12 months and 30 days from its first activation')
+    expect(res.out).toContain('Versions          bound by its first activation (at purchase)')
+    expect(res.out).toContain('Devices           1 of 3 active, 3 seats')
     expect(res.out).not.toContain('Email')
     expect(res.out).not.toContain('Valid until')
     const open = license({ versions: { minMajor: 2, maxMajor: 3, upgradeUntil: NOW + DAY } })
     expect((await harness({ answers: [{ status: 200, body: { license: open } }] }).run('licenses', 'get', KEY)).out).toContain(
-      'Versions      2 to 3; every major from 2 up until 2026-09-22 14:13 UTC',
+      'Versions          2 to 3; every major from 2 up until 2026-09-22 14:13 UTC',
     )
   })
 
@@ -208,16 +266,16 @@ describe('reading licenses', () => {
       return (await harness({ answers: [{ status: 200, body: { license: answered } }] }).run('licenses', 'get', KEY)).out
     }
     const own = await shown({ seatReleaseDays: null, leaseDays: 1, graceDays: 0, validUntil: NOW + 10 * DAY })
-    expect(own).toContain('Unused seats  kept')
-    expect(own).toContain('Offline days  1 day\n')
-    expect(own).toContain('Grace         none')
-    expect(await shown({ seatReleaseDays: 1 })).toContain('Unused seats  freed after 1 day unseen')
+    expect(own).toContain('Unused seats      kept')
+    expect(own).toContain('Offline days      1 day\n')
+    expect(own).toContain('Grace             none')
+    expect(await shown({ seatReleaseDays: 1 })).toContain('Unused seats      freed after 1 day unseen')
     for (const [model, days] of [['perpetual', 30], ['subscription', 7], ['trial', 7], ['timed', 7], ['lifetime', 30]] as const) {
-      expect(await shown({ model, leaseDays: null }), model).toContain(`Offline days  ${days} days (its type's default)`)
+      expect(await shown({ model, leaseDays: null }), model).toContain(`Offline days      ${days} days (its type's default)`)
     }
     const older = await shown({}, ['leaseDays', 'graceDays', 'seatReleaseDays'])
     expect(older).not.toMatch(/^(Grace|Unused seats|Offline days) /m)
-    expect(older).toContain('Devices       1 of 3 active')
+    expect(older).toContain('Devices           1 of 3 active')
   })
 
   it('puts a key typed with odd characters into the path safely', async () => {
@@ -266,7 +324,7 @@ describe('reading licenses', () => {
 
   it('shows what a checkout made: one license, or the keys of a sale', async () => {
     const one = harness({ answers: [{ status: 200, body: { license: license() } }] })
-    expect((await one.run('licenses', 'checkout', 'cs_test_1')).out).toContain(`Key           ${KEY}`)
+    expect((await one.run('licenses', 'checkout', 'cs_test_1')).out).toContain(`Key               ${KEY}`)
     expect(one.calls[0]?.url).toBe(`${BASE}/v1/checkouts/cs_test_1/license`)
     const sale = harness({ answers: [{ status: 200, body: { license: license(), licenses: [license(), license({ key: 'K-2' })] } }] })
     const rows = (await sale.run('licenses', 'checkout', 'cs_test_1')).out.split('\n')
@@ -351,7 +409,7 @@ describe('changing a license', () => {
     const h = harness({ answers: [{ status: 200, body: { license: license({ deviceLimit: 5 }) } }] })
     const res = await h.run('licenses', 'device-limit', KEY, '5')
     expect(h.calls[0]).toMatchObject({ method: 'POST', path: `/v1/licenses/${KEY}/devices`, body: { deviceLimit: 5 } })
-    expect(res.out).toContain('Devices       1 of 5 active')
+    expect(res.out).toContain('Devices           1 of 5 active')
     expect((await harness().run('licenses', 'device-limit', KEY)).err).toContain('missing the device limit')
   })
 
@@ -365,8 +423,8 @@ describe('changing a license', () => {
     ])
     expect(on).toMatchObject({ code: EXIT.ok, err: '' })
     expect(on.out).toMatch(new RegExp(`^Key +${KEY}$`, 'm'))
-    expect(on.out).toContain('Unused seats  freed after 30 days unseen')
-    expect(off.out).toContain('Unused seats  kept')
+    expect(on.out).toContain('Unused seats      freed after 30 days unseen')
+    expect(off.out).toContain('Unused seats      kept')
     const answer = { license: license({ seatReleaseDays: 365 }) }
     const json = await harness({ answers: [{ status: 200, body: answer }] }).run('licenses', 'seat-release', KEY, '365', '--json')
     expect(JSON.parse(json.out)).toEqual(answer)
@@ -416,5 +474,211 @@ describe('changing a license', () => {
     expect(h.calls[0]).toMatchObject({ method: 'DELETE', path: `/v1/licenses/${KEY}/activations/act_1`, body: undefined })
     const padded = harness({ answers: [{ status: 200, body: { released: 1 } }] })
     expect((await padded.run('licenses', 'free-device', KEY, ' act_1 ')).out).toBe(`Freed act_1 from ${KEY}.`)
+  })
+})
+
+describe('who can activate', () => {
+  const shown = async (fields: Record<string, unknown>, drop: string[] = []) => {
+    const answered = license(fields)
+    for (const name of drop) delete answered[name]
+    return (await harness({ answers: [{ status: 200, body: { license: answered } }] }).run('licenses', 'get', KEY)).out
+  }
+
+  it('shows each lock in the dashboard\'s words, and anyone when the worker does not ask it: a test license, or a key with no email', async () => {
+    expect(await shown({ userLock: 'off' })).toMatch(/^Who can activate  anyone with the key$/m)
+    expect(await shown({ userLock: 'email' })).toMatch(/^Who can activate  only the buyer, by email$/m)
+    expect(await shown({ userLock: 'code' })).toMatch(/^Who can activate  only the buyer, by email and code$/m)
+    expect(await shown({ userLock: 'email', test: true })).toMatch(/^Who can activate  only the buyer, by email, but a test license is never locked, so anyone$/m)
+    expect(await shown({ userLock: 'code', email: null })).toMatch(/^Who can activate  only the buyer, by email and code, but this key has no email, so anyone$/m)
+    expect(await shown({ userLock: 'email', email: '  ' })).toMatch(/^Who can activate  only the buyer, by email, but this key has no email, so anyone$/m)
+    expect(await shown({ userLock: 'off', email: null, test: true })).toMatch(/^Who can activate  anyone with the key$/m)
+  })
+
+  it('shows a lock this version does not know as KeyGrant named it, and no row from a KeyGrant that does not say', async () => {
+    expect(await shown({ userLock: 'passkey' })).toMatch(/^Who can activate  passkey$/m)
+    const older = await shown({}, ['userLock'])
+    expect(older).not.toContain('Who can activate')
+    // Its fields align as they did before the row existed.
+    expect(older).toMatch(/^Devices       1 of 3 active$/m)
+  })
+
+  it('sets the lock, its case and spaces aside, and prints the license as it now stands', async () => {
+    const h = harness({
+      answers: [
+        { status: 200, body: { license: license({ userLock: 'code' }) } },
+        { status: 200, body: { license: license({ userLock: 'email' }) } },
+        { status: 200, body: { license: license({ userLock: 'off' }) } },
+      ],
+    })
+    const code = await h.run('licenses', 'user-lock', KEY, 'code')
+    const email = await h.run('licenses', 'user-lock', KEY, ' Email ')
+    const off = await h.run('licenses', 'user-lock', KEY, 'OFF')
+    expect(h.calls.map((c) => [c.method, c.path, c.body])).toEqual([
+      ['POST', `/v1/licenses/${KEY}/user-lock`, { userLock: 'code' }],
+      ['POST', `/v1/licenses/${KEY}/user-lock`, { userLock: 'email' }],
+      ['POST', `/v1/licenses/${KEY}/user-lock`, { userLock: 'off' }],
+    ])
+    expect(code).toMatchObject({ code: EXIT.ok, err: '' })
+    expect(code.out).toMatch(new RegExp(`^Key +${KEY}$`, 'm'))
+    expect(code.out).toMatch(/^Who can activate  only the buyer, by email and code$/m)
+    expect(email.out).toMatch(/^Who can activate  only the buyer, by email$/m)
+    expect(off.out).toMatch(/^Who can activate  anyone with the key$/m)
+    const answer = { license: license({ userLock: 'email' }) }
+    const json = await harness({ answers: [{ status: 200, body: answer }] }).run('licenses', 'user-lock', KEY, 'email', '--json')
+    expect(JSON.parse(json.out)).toEqual(answer)
+  })
+
+  it('refuses a lock the API would not take before asking anything, with no key and no network', async () => {
+    const refusals: [string[], string][] = [
+      [[KEY, 'none'], 'who can activate must be off, email or code, not "none"'],
+      [[KEY, 'emails'], 'who can activate must be off, email or code, not "emails"'],
+      [[KEY, ''], 'who can activate must be off, email or code, not ""'],
+      [[KEY], 'missing who can activate (off, email or code)'],
+      [[KEY, 'code', 'extra'], 'unexpected argument "extra"'],
+    ]
+    for (const [args, said] of refusals) {
+      const h = harness({ env: {} })
+      expect(await h.run('licenses', 'user-lock', ...args)).toEqual({ code: EXIT.usage, out: '', err: `keygrant: ${said}\nRun \`keygrant licenses user-lock --help\`.` })
+      expect(h.calls).toEqual([])
+    }
+  })
+
+  it('names the API refusing a lock: a key with no email, a test license, a license file, or a key it does not reach', async () => {
+    const refused = async (error: string) => (await harness({ answers: [{ status: 400, body: { error } }] }).run('licenses', 'user-lock', KEY, 'code')).err
+    expect(await refused('email-required')).toBe(
+      "keygrant: email-required: the key needs the customer's email and has none: a key sent as a file is made out to it, and a lock on who can activate compares with it (a key issued with --email has one)",
+    )
+    expect(await refused('user-lock-test-key')).toBe('keygrant: user-lock-test-key: a test license is never locked')
+    expect(await refused('user-lock-license-file')).toBe('keygrant: user-lock-license-file: a key sent as an offline license file never activates, so it cannot be locked')
+    const unknown = await harness({ answers: [{ status: 404, body: { error: 'unknown-license' } }] }).run('licenses', 'user-lock', KEY, 'off', '--json')
+    expect(unknown.code).toBe(EXIT.refused)
+    expect(JSON.parse(unknown.err)).toEqual({ error: 'unknown-license', status: 404 })
+  })
+
+  it('names an issue refused for want of an email, under a model that locks or sends a file, or a file with upgrade protection', async () => {
+    const issued = async (error: string, ...extra: string[]) =>
+      (await harness({ answers: [{ status: 400, body: { error } }] }).run('licenses', 'issue', '--product', 'sluice', '--model', 'mod_pro', ...extra)).err
+    expect(await issued('email-required')).toBe(
+      "keygrant: email-required: the key needs the customer's email and has none: a key sent as a file is made out to it, and a lock on who can activate compares with it (a key issued with --email has one)",
+    )
+    expect(await issued('license-file-upgrade-protection', '--email', 'jo@example.com', '--upgrade-months', '12')).toBe(
+      'keygrant: license-file-upgrade-protection: an offline license file never checks in, so a key sent as one takes no upgrade window (--upgrade-months on an issue, --upgrade-until on versions)',
+    )
+  })
+})
+
+describe('delivered as', () => {
+  const shown = async (fields: Record<string, unknown>, drop: string[] = []) => {
+    const answered = license(fields)
+    for (const name of drop) delete answered[name]
+    return (await harness({ answers: [{ status: 200, body: { license: answered } }] }).run('licenses', 'get', KEY)).out
+  }
+
+  it('says how the key was delivered, in the dashboard\'s words, a delivery it does not know as named, and nothing from a KeyGrant that does not say', async () => {
+    expect(await shown({ delivery: 'key' })).toMatch(/^Delivered as      typed key$/m)
+    expect(await shown({ delivery: 'key_file' })).toMatch(/^Delivered as      key file$/m)
+    expect(await shown({ delivery: 'license_file' })).toMatch(/^Delivered as      license file, offline for good$/m)
+    expect(await shown({ delivery: 'carrier_pigeon' })).toMatch(/^Delivered as      carrier_pigeon$/m)
+    expect(await shown({}, ['delivery'])).not.toContain('Delivered as')
+  })
+})
+
+describe('licenses devices', () => {
+  const device = (fields: Record<string, unknown> = {}) => ({
+    id: 'act_1',
+    fingerprint: 'fp-1',
+    name: 'Studio Mac',
+    platform: 'macOS 15.4',
+    appVersion: '2.4.1',
+    lastSeen: NOW - DAY,
+    createdAt: NOW - 30 * DAY,
+    releaseAt: null,
+    ...fields,
+  })
+  const listed = (...activations: Record<string, unknown>[]) => ({ status: 200, body: { key: KEY, activations } })
+
+  it('lists the devices the license is active on with the id free-device takes', async () => {
+    const h = harness({ answers: [listed(device(), device({ id: 'act_2', name: null, platform: null, appVersion: null, lastSeen: null, createdAt: NOW - DAY }))] })
+    const res = await h.run('licenses', 'devices', KEY)
+    expect(request(h.calls[0])).toMatchObject({ method: 'GET', url: `${BASE}/v1/licenses/${KEY}/activations`, body: undefined })
+    expect(res).toEqual({
+      code: EXIT.ok,
+      err: '',
+      out: [
+        'ID     NAME        PLATFORM    APP    LAST SEEN             ACTIVATED',
+        'act_1  Studio Mac  macOS 15.4  2.4.1  2026-09-20 14:13 UTC  2026-08-22 14:13 UTC',
+        'act_2                                 never                 2026-09-20 14:13 UTC',
+      ].join('\n'),
+    })
+  })
+
+  it('adds FREED AFTER when any device, not only the first, may be freed for going unseen', async () => {
+    const res = await harness({ answers: [listed(device(), device({ id: 'act_2', releaseAt: NOW + 20 * DAY }), device({ id: 'act_3', releaseAt: undefined }))] }).run('licenses', 'devices', KEY)
+    expect(res.out).toBe(
+      [
+        'ID     NAME        PLATFORM    APP    LAST SEEN             ACTIVATED             FREED AFTER',
+        'act_1  Studio Mac  macOS 15.4  2.4.1  2026-09-20 14:13 UTC  2026-08-22 14:13 UTC',
+        'act_2  Studio Mac  macOS 15.4  2.4.1  2026-09-20 14:13 UTC  2026-08-22 14:13 UTC  2026-10-11 14:13 UTC',
+        'act_3  Studio Mac  macOS 15.4  2.4.1  2026-09-20 14:13 UTC  2026-08-22 14:13 UTC',
+      ].join('\n'),
+    )
+  })
+
+  it('shows the control and direction characters an app may send in a name, platform or version as ?, never acting on them', async () => {
+    const esc = String.fromCharCode(27)
+    const name = `x${esc}[2A${String.fromCharCode(13)}act_9  forged${String.fromCharCode(10)}row`
+    const platform = `${String.fromCharCode(0x202e)}xoc${String.fromCharCode(0x2066)}`
+    const version = `1${String.fromCharCode(0x2028)}2${String.fromCharCode(0x9b)}3${String.fromCharCode(127)}`
+    const res = await harness({ answers: [listed(device({ name, platform, appVersion: version }))] }).run('licenses', 'devices', KEY)
+    const row = res.out.split('\n')
+    expect(row).toHaveLength(2)
+    expect(row[1]).toBe('act_1  x?[2A?act_9  forged?row  ?xoc?     1?2?3?  2026-09-20 14:13 UTC  2026-08-22 14:13 UTC')
+    for (const code of [27, 13, 10, 0x202e, 0x2066, 0x2028, 0x9b, 127]) expect(row[1]).not.toContain(String.fromCharCode(code))
+    // --json keeps what the API answered, escaped as JSON.
+    const json = await harness({ answers: [listed(device({ name }))] }).run('licenses', 'devices', KEY, '--json')
+    expect(JSON.parse(json.out).activations[0].name).toBe(name)
+  })
+
+  it('says when the license is on no device, and prints the API answer under --json, an empty list included', async () => {
+    expect((await harness({ answers: [listed()] }).run('licenses', 'devices', KEY)).out).toBe('No devices: the license is active on none.')
+    for (const body of [{ key: KEY, activations: [] }, { key: KEY, activations: [device()] }]) {
+      const json = await harness({ answers: [{ status: 200, body }] }).run('licenses', 'devices', KEY, '--json')
+      expect(JSON.parse(json.out)).toEqual(body)
+    }
+  })
+
+  it('names a key that is not yours, and needs the key', async () => {
+    const theirs = await harness({ answers: [{ status: 404, body: { error: 'unknown-license' } }] }).run('licenses', 'devices', KEY, '--json')
+    expect([theirs.code, JSON.parse(theirs.err)]).toEqual([EXIT.refused, { error: 'unknown-license', status: 404 }])
+    const h = harness({ env: {} })
+    expect(await h.run('licenses', 'devices')).toEqual({ code: EXIT.usage, out: '', err: 'keygrant: missing the license key\nRun `keygrant licenses devices --help`.' })
+    expect(h.calls).toEqual([])
+  })
+
+  it('takes an answer whose devices are not the shape it prints for something other than KeyGrant, exit 5', async () => {
+    const without = (field: string) => {
+      const d: Record<string, unknown> = device()
+      delete d[field]
+      return d
+    }
+    const bad: [string, unknown][] = [
+      ['no list', {}],
+      ['a list that is not one', { activations: {} }],
+      ['an entry that is not an object', { activations: [null] }],
+      ['a text entry', { activations: ['act_1'] }],
+      ['no id', { activations: [without('id')] }],
+      ['a number id', { activations: [device({ id: 7 })] }],
+      ['no activation time', { activations: [without('createdAt')] }],
+      ['a text activation time', { activations: [device({ createdAt: 'then' })] }],
+      ['a text last check-in', { activations: [device({ lastSeen: 'yesterday' })] }],
+      ['a text release time', { activations: [device({ releaseAt: 'soon' })] }],
+      ['a number name', { activations: [device({ name: 5 })] }],
+      ['a number platform', { activations: [device({ platform: 5 })] }],
+      ['a number version', { activations: [device({ appVersion: 2 })] }],
+    ]
+    for (const [what, body] of bad) {
+      const res = await harness({ answers: [{ status: 200, body }] }).run('licenses', 'devices', KEY)
+      expect([what, res.code, res.out, res.err]).toEqual([what, EXIT.unavailable, '', 'keygrant: https://api.keygrant.dev answered HTTP 200 with something that is not KeyGrant\x27s JSON'])
+    }
   })
 })

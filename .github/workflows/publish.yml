@@ -2,6 +2,7 @@ name: publish
 
 # A version tag (0.1.0, no "v") builds and checks @keygrant/cli, then publishes that build to npm
 # through npm's trusted publishing: no npm token is stored anywhere, and the package carries provenance.
+# It also builds the command as one file per platform and attaches the files to the tag's GitHub release.
 # The build job, which installs dependencies, cannot request an identity token; the publish job, which can,
 # runs no package code. A version already on npm is skipped.
 
@@ -144,3 +145,134 @@ jobs:
           npm --version
           # "./": a path npm cannot read as a package name or a GitHub owner/repository.
           npm publish "./keygrant-cli-$TAG.tgz" --access public --tag "$DIST_TAG" --provenance --ignore-scripts
+
+  # The command as one executable file per platform (cli/scripts/build-binary.mjs), built on a runner of each, for
+  # people with no Node.js. Apart from the npm publish: a version npm has already still gets its files, and a
+  # platform that fails leaves the others and the package alone. The release job attaches them to the tag's GitHub
+  # release with the run's own token, and never replaces a file already there; nothing else is stored.
+  binaries:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+          - runner: macos-15
+            platform: macos-arm64
+          - runner: macos-15-intel
+            platform: macos-x64
+          - runner: windows-2025
+            platform: windows-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The commit the run was started for, which the tag must still name: a tag moved since builds nothing.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check the tag still names this commit
+        run: |
+          git fetch --quiet --no-tags --depth=1 origin "+refs/tags/$TAG:refs/tags/$TAG"
+          if [ "$(git rev-parse "refs/tags/$TAG^{commit}")" != "$GITHUB_SHA" ]; then
+            echo "::error::The tag $TAG has moved since this run started: nothing is built."
+            exit 1
+          fi
+      # Node 22: the binary is a copy of the Node.js that builds it (the build prints which).
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Build and check the single file
+        run: node cli/scripts/build-binary.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binary-${{ matrix.platform }}
+          path: cli/dist-binary/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release-binaries:
+    needs: [build, binaries]
+    # Whatever platforms built, once the build job accepted the tag; a refused tag attaches nothing.
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.binaries.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: out
+      - name: Check the files
+        working-directory: out
+        run: |
+          # This version's files alone, each matching its own checksum.
+          ls keygrant-* > /dev/null 2>&1 || { echo "::error::No platform built its file: nothing to attach."; exit 1; }
+          for file in *; do
+            case "$file" in
+              "keygrant-$TAG-"*) ;;
+              *) echo "::error::$file is not one of $TAG's files: nothing is attached."; exit 1 ;;
+            esac
+          done
+          for sum in keygrant-*.sha256; do sha256sum -c "$sum"; done
+      - name: Attach the files to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIST_TAG: ${{ needs.build.outputs.dist-tag }}
+        run: |
+          cat > notes.md <<EOF
+          The \`keygrant\` command as one file for each platform: no Node.js needed. Download the one for your
+          machine, check it against its \`.sha256\`, make it executable (\`chmod +x\`) and put it on your PATH. The
+          Linux files need glibc 2.28 or later (not Alpine).
+
+          It keeps no key: set \`KEYGRANT_API_KEY\`. To keep a key with \`keygrant login\`, use the npm package,
+          \`npm install --global @keygrant/cli@$TAG\`.
+
+          macOS may stop a downloaded file the first time; \`xattr -d com.apple.quarantine <file>\` lets it run.
+          EOF
+          # A file already on the release is never replaced: a release keeps the files it was first given. A
+          # platform's file and its .sha256 go up together or not at all, so a checksum always names its own file.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            have=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+            held() { printf '%s\n' "$have" | grep -qxF "$1"; }
+            missing=()
+            for file in out/keygrant-*; do
+              case "$file" in *.sha256) continue ;; esac
+              name=$(basename "$file")
+              if held "$name" && held "$name.sha256"; then continue; fi
+              if held "$name" || held "$name.sha256"; then
+                echo "::error::The release holds $name or its .sha256 without the other: nothing of that platform is attached. Look at the release before adding either."
+                exit 1
+              fi
+              missing+=("$file" "$file.sha256")
+            done
+            if [ ${#missing[@]} -gt 0 ]; then
+              gh release upload "$TAG" "${missing[@]}" --repo "$GITHUB_REPOSITORY"
+            else
+              echo "::notice::Every file built is on the release already: nothing was replaced."
+            fi
+          else
+            # As npm tags it: a prerelease is one here too, and a fix to an older line never becomes the latest.
+            case "$DIST_TAG" in
+              next) flags=(--prerelease) ;;
+              previous) flags=(--latest=false) ;;
+              *) flags=() ;;
+            esac
+            gh release create "$TAG" out/keygrant-* --repo "$GITHUB_REPOSITORY" --verify-tag --title "KeyGrant CLI $TAG" --notes-file notes.md "${flags[@]}"
+          fi
+          # A platform that did not build is named, so the release says what it lacks.
+          for platform in linux-x64 linux-arm64 macos-arm64 macos-x64 windows-x64; do
+            ls out/keygrant-*-"$platform"* > /dev/null 2>&1 || echo "::warning::No file for $platform in this release."
+          done

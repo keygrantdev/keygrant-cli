@@ -192,6 +192,13 @@ export const has = {
     (m.addsUses === undefined || (has.object(m.addsUses) && Object.values(m.addsUses).every(has.uses))),
   license: (v: unknown): boolean => has.object(v) && typeof v.key === 'string' && has.meters(v.meters),
   licenses: (v: unknown): boolean => Array.isArray(v) && v.every(has.license),
+  /** One device a licence is active on, as `GET /v1/licenses/:key/activations` lists it. */
+  activation: (v: unknown): boolean =>
+    has.object(v) &&
+    typeof v.id === 'string' &&
+    typeof v.createdAt === 'number' &&
+    [v.lastSeen, v.releaseAt].every((t) => t === null || t === undefined || typeof t === 'number') &&
+    [v.name, v.platform, v.appVersion].every((t) => t === null || t === undefined || typeof t === 'string'),
   /** A license file as the file route answers it: its facts, and its content to save under its name. */
   file: (v: unknown): boolean =>
     has.object(v) &&
@@ -220,4 +227,6 @@ export const answers = {
   spent: ((b) => has.meter(b.meter)) as Answer,
   revoked: ((b) => b.ok === true) as Answer,
   released: ((b) => b.released === 0 || b.released === 1) as Answer,
+  /** The devices a licence is active on: `{ activations: [ ... ] }`. */
+  devices: ((b) => Array.isArray(b.activations) && b.activations.every(has.activation)) as Answer,
 }

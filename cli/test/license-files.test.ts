@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { OPEN_MAJOR, generateKeyPair, importSigningKey, importVerifyingKeys, keyId, licenseFileText, signLease, signLicenseFile, verifyLicenseFile } from '@keygrant/shared'
 import { describe, expect, it } from 'vitest'
+import { FILE_REASONS, fileHead } from '../src/commands/file-view.js'
 import { EXIT } from '../src/errors.js'
 import { harness, LIVE_KEY, NOW } from './harness.js'
 
@@ -366,6 +367,26 @@ describe('keygrant verify of a license file', () => {
     )
     const json = await harness({ env: {}, files: { 'f.kglicense': licenseFileText(token), 'k.json': other.set } }).run('verify', 'f.kglicense', '--key', 'k.json', '--json')
     expect(JSON.parse(json.out)).toEqual({ valid: false, reason: 'unknown-key', kid: s.kid })
+  })
+
+  it('never prints a key id from a file\'s unsigned header raw: the verifier refuses one that is not base64url, and the head shows any it is handed printable', async () => {
+    const s = await signer()
+    const token = await signLicenseFile(OFFLINE, s.key, s.kid, NOW)
+    const [header, payload, signature] = token.split('.') as [string, string, string]
+    const kid = `kid${String.fromCharCode(27)}]0;pwned${String.fromCharCode(7)}${String.fromCharCode(10)}Valid license file.${String.fromCharCode(0x202e)}`
+    const hostile = { ...(JSON.parse(Buffer.from(header, 'base64url').toString('utf8')) as Record<string, unknown>), kid }
+    const forged = `${Buffer.from(JSON.stringify(hostile)).toString('base64url')}.${payload}.${signature}`
+    const files = { 'f.kglicense': licenseFileText(forged), 'k.json': s.set }
+    const res = await harness({ env: {}, files }).run('verify', 'f.kglicense', '--key', 'k.json')
+    expect(res).toEqual({ code: EXIT.refused, err: '', out: `Not valid: not-a-license-file: ${FILE_REASONS['not-a-license-file']}.` })
+    // --json keeps the id the file named, each control and direction character escaped.
+    const json = await harness({ env: {}, files }).run('verify', 'f.kglicense', '--key', 'k.json', '--json')
+    for (const code of [27, 7, 0x202e]) expect(json.out).not.toContain(String.fromCharCode(code))
+    expect(JSON.parse(json.out)).toEqual({ valid: false, reason: 'not-a-license-file', kid })
+    // And the head shows any key id it is handed printable, on one line.
+    expect(fileHead({ valid: false, reason: 'unknown-key', kid })).toBe(
+      `Not valid: unknown-key: ${FILE_REASONS['unknown-key']}. It names the signing key kid?]0;pwned??Valid license file.?.`,
+    )
   })
 
   it('says a file whose payload or signature was changed is not signed by its key', async () => {

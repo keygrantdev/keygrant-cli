@@ -43,6 +43,8 @@ export function osCredentialStore(platform: string, load: () => unknown = defaul
       try {
         loaded = load()
       } catch (error) {
+        // A loader that knows why there is no store (the single binary's) says so itself.
+        if (error instanceof StoreUnavailable) throw error
         throw new StoreUnavailable(`the credential store module is not installed for this platform (${reason(error)})`)
       }
       const found = (loaded as { AsyncEntry?: unknown } | null)?.AsyncEntry

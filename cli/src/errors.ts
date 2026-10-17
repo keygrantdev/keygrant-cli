@@ -58,8 +58,10 @@ const SENTENCES: Record<string, (body: Record<string, unknown>) => string> = {
   'license-revoked': () => 'the key is revoked (it cannot be extended or spent from, and no file is made for it)',
   'license-expired': () => 'the key has expired, so nothing is spent from it',
   'used-up': (b) => `the meter has ${number(b.left)} uses left, fewer than asked`,
-  'unknown-meter': () =>
-    "the key holds no meter with that code, and the product has none to add to it with --set (`keygrant licenses meters <key>` lists a key's meters, `keygrant products` a product's)",
+  'unknown-meter': (b) =>
+    typeof b.meter === 'string'
+      ? `the product has no meter ${JSON.stringify(b.meter)} (\`keygrant products\` lists a product's meters)`
+      : "the key holds no meter with that code (`keygrant licenses meters <key>` lists a key's meters, and `keygrant licenses uses <key> <meter> --set <n>` adds one of its product's)",
   'meter-not-periodic': () => 'the meter does not come back each billing period, so there is no period to reset',
   'meter-license-file': () => 'a key sent as an offline license file carries no meter',
   'meter-period-subscription-only': () => 'a meter that comes back each billing period is for a subscription key only',
@@ -77,6 +79,12 @@ const SENTENCES: Record<string, (body: Record<string, unknown>) => string> = {
   'term-ended': () => 'the model\'s end date has passed, so a key under it would run out before it was made: give --expires',
   'unknown-entitlement': (b) => `the product's catalog has no entitlement ${JSON.stringify(b.entitlement ?? '?')}`,
   'entitlement-type': (b) => `the entitlement ${JSON.stringify(b.entitlement ?? '?')} is of another type in the product's catalog`,
+  'email-required': () =>
+    "the key needs the customer's email and has none: a key sent as a file is made out to it, and a lock on who can activate compares with it (a key issued with --email has one)",
+  'license-file-upgrade-protection': () => 'an offline license file never checks in, so a key sent as one takes no upgrade window (--upgrade-months on an issue, --upgrade-until on versions)',
+  'user-lock-license-file': () => 'a key sent as an offline license file never activates, so it cannot be locked',
+  'user-lock-test-key': () => 'a test license is never locked',
+  'no-meters': () => "the license model counts no uses, so there is no meter to use up (with no --model, none of the product's models that issue keys and are not archived does; `keygrant products` shows what each counts)",
   'invalid-seat-release': () => 'the seat release days are fewer than the key\'s offline days: a device is never freed while it may still run offline on its lease (`keygrant licenses get <key>` shows a key\'s offline days, and `keygrant products --json` each model\'s as leaseDays, null for its type\'s default)',
   'mint-failed': () => 'KeyGrant failed while making the key',
 }

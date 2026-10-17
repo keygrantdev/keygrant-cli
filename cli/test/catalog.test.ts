@@ -60,6 +60,41 @@ describe('keygrant products', () => {
     )
   })
 
+  it('says after what a model sells when its keys are sent as a file, and nothing for a typed key or an upgrade', async () => {
+    const files = {
+      products: [
+        {
+          slug: 'valhalla',
+          name: 'Valhalla',
+          keyPrefix: 'VAL',
+          currentMajor: 1,
+          archived: false,
+          models: [
+            model({ id: 'mod_typed', name: 'Typed', type: 'perpetual', delivery: 'key' }),
+            model({ id: 'mod_kf', name: 'Key file', type: 'subscription', delivery: 'key_file' }),
+            model({ id: 'mod_lf', name: 'Studio', type: 'perpetual', delivery: 'license_file' }),
+            model({ id: 'mod_pass', name: 'Pass', type: 'timed', termLength: 30, termUnit: 'days', delivery: 'key_file' }),
+            model({ id: 'mod_up', name: 'Upgrade', type: 'perpetual', upgradesExisting: true, delivery: 'key_file' }),
+            model({ id: 'mod_new', name: 'New', type: 'perpetual', delivery: 'qr_code' }),
+          ],
+        },
+      ],
+    }
+    const res = await harness({ answers: [{ status: 200, body: files }] }).run('products')
+    expect(res.out).toBe(
+      [
+        'valhalla  Valhalla  (keys VAL-..., current version 1)',
+        '  MODEL      NAME      SELLS                          DEVICES  ENTITLEMENTS',
+        '  mod_typed  Typed     perpetual                      3        none',
+        '  mod_kf     Key file  subscription, as a key file    3        none',
+        '  mod_lf     Studio    perpetual, as a license file   3        none',
+        '  mod_pass   Pass      timed, 30 days, as a key file  3        none',
+        '  mod_up     Upgrade   perpetual upgrade              3        none',
+        '  mod_new    New       perpetual, as qr_code          3        none',
+      ].join('\n'),
+    )
+  })
+
   it('shows one product with --product, prints the API answer under --json, and says when there are none', async () => {
     const one = await harness({ answers: [{ status: 200, body: PRODUCTS }] }).run('products', '--product', 'atlas', '--json')
     expect(JSON.parse(one.out)).toEqual({ products: [PRODUCTS.products[1]] })
@@ -68,6 +103,73 @@ describe('keygrant products', () => {
     const missing = await harness({ answers: [{ status: 200, body: PRODUCTS }] }).run('products', '--product', 'nope')
     expect(missing).toMatchObject({ code: EXIT.refused, err: 'keygrant: unknown-product: no product of yours has the API ID "nope"' })
     expect((await harness({ answers: [{ status: 200, body: { products: [] } }] }).run('products')).out).toBe('No products yet: make one on the dashboard.')
+  })
+})
+
+describe('keygrant products, for a product whose models lock who can activate', () => {
+  const product = (models: Record<string, unknown>[]) => ({
+    products: [{ slug: 'informant', name: 'Informant', keyPrefix: 'INF', currentMajor: 2, archived: false, models }],
+  })
+
+  it('adds a column saying who can activate each model\'s keys, in the dashboard\'s words, when a model locks them', async () => {
+    const locked = product([
+      model({ id: 'mod_std', name: 'Standard', userLock: 'off' }),
+      model({ id: 'mod_pro', name: 'Pro', userLock: 'email' }),
+      model({ id: 'mod_studio', name: 'Studio', userLock: 'code', archived: true }),
+      model({ id: 'mod_old', name: 'Old' }),
+    ])
+    const res = await harness({ answers: [{ status: 200, body: locked }] }).run('products')
+    expect(res.out).toBe(
+      [
+        'informant  Informant  (keys INF-..., current version 2)',
+        '  MODEL       NAME      SELLS         DEVICES  ENTITLEMENTS  WHO CAN ACTIVATE',
+        '  mod_std     Standard  subscription  3        none          anyone with the key',
+        '  mod_pro     Pro       subscription  3        none          only the buyer, by email',
+        '  mod_studio  Studio    subscription  3        none          only the buyer, by email and code  archived',
+        '  mod_old     Old       subscription  3        none          anyone with the key',
+      ].join('\n'),
+    )
+  })
+
+  it('puts the column after the meters and before archived, on the product that locks alone', async () => {
+    const both = {
+      products: [
+        {
+          slug: 'render',
+          name: 'Render',
+          keyPrefix: 'RENDER',
+          currentMajor: 2,
+          archived: false,
+          meters: [{ code: 'exports', name: 'Exports', description: null }],
+          models: [
+            model({ id: 'mod_pack', name: 'Pack', type: 'perpetual', userLock: 'code', archived: true, meters: [{ code: 'exports', uses: 1000, resets: 'never', offline: null }] }),
+            model({ id: 'mod_free', name: 'Free', type: 'trial', userLock: 'passkey', meters: [] }),
+          ],
+        },
+        { slug: 'plain', name: 'Plain', keyPrefix: 'PLAIN', currentMajor: 1, archived: false, meters: [], models: [model({ id: 'mod_one', name: 'One', userLock: 'off' })] },
+      ],
+    }
+    const res = await harness({ answers: [{ status: 200, body: both }] }).run('products')
+    expect(res.out).toBe(
+      [
+        'render  Render  (keys RENDER-..., current version 2)',
+        '  meters: exports (Exports)',
+        '  MODEL     NAME  SELLS      DEVICES  ENTITLEMENTS  METERS         WHO CAN ACTIVATE',
+        '  mod_pack  Pack  perpetual  3        none          exports 1,000  only the buyer, by email and code  archived',
+        '  mod_free  Free  trial      3        none                         passkey',
+        '',
+        'plain  Plain  (keys PLAIN-..., current version 1)',
+        '  MODEL    NAME  SELLS         DEVICES  ENTITLEMENTS',
+        '  mod_one  One   subscription  3        none',
+      ].join('\n'),
+    )
+  })
+
+  it('leaves the column out while no model locks, or KeyGrant does not say', async () => {
+    const open = product([model({ id: 'mod_std', name: 'Standard', userLock: 'off' })])
+    expect((await harness({ answers: [{ status: 200, body: open }] }).run('products')).out).not.toContain('WHO CAN ACTIVATE')
+    const unsaid = product([model({ id: 'mod_std', name: 'Standard' })])
+    expect((await harness({ answers: [{ status: 200, body: unsaid }] }).run('products')).out).not.toContain('WHO CAN ACTIVATE')
   })
 })
 
@@ -195,7 +297,7 @@ describe('keygrant licenses test', () => {
       body: { product: 'sluice', scenario: 'valid' },
     })
     expect(res.out.split('\n')[0]).toBe('SLUICE-TEST-AAAA-BBBB-CCCC')
-    expect(res.out).toContain('State         active, test license')
+    expect(res.out).toContain('State             active, test license')
   })
 
   it('takes a scenario, a model and a version, and prints the API answer under --json', async () => {
@@ -204,6 +306,19 @@ describe('keygrant licenses test', () => {
     const res = await h.run('licenses', 'test', '--product', 'sluice', '--scenario', 'device-limit', '--model', 'mod_annual', '--version', '3', '--json')
     expect(h.calls[0]?.body).toEqual({ product: 'sluice', scenario: 'device-limit', modelId: 'mod_annual', version: '3' })
     expect(JSON.parse(res.out)).toEqual(made)
+  })
+
+  it('makes a used-up test license, and names the API refusing one for a model that counts nothing', async () => {
+    const made = { key: 'K', scenario: 'used-up', license: license({ test: true }) }
+    const h = harness({ answers: [{ status: 201, body: made }] })
+    expect((await h.run('licenses', 'test', '--product', 'sluice', '--scenario', 'used-up')).code).toBe(EXIT.ok)
+    expect(h.calls[0]?.body).toEqual({ product: 'sluice', scenario: 'used-up' })
+    const none = await harness({ answers: [{ status: 400, body: { error: 'no-meters' } }] }).run('licenses', 'test', '--product', 'sluice', '--scenario', 'used-up', '--model', 'mod_annual')
+    expect(none).toEqual({
+      code: EXIT.refused,
+      out: '',
+      err: "keygrant: no-meters: the license model counts no uses, so there is no meter to use up (with no --model, none of the product's models that issue keys and are not archived does; `keygrant products` shows what each counts)",
+    })
   })
 
   it('names the idempotency key it made when the test license may have been made all the same', async () => {
@@ -216,7 +331,7 @@ describe('keygrant licenses test', () => {
 
   it('refuses a scenario it does not know, or no product, and passes on the account at its test licenses', async () => {
     expect((await harness().run('licenses', 'test', '--product', 'sluice', '--scenario', 'broken')).err).toContain(
-      '--scenario must be one of valid, trial-ending, expired, revoked, device-limit',
+      '--scenario must be one of valid, trial-ending, expired, revoked, device-limit, used-up\n',
     )
     expect((await harness().run('licenses', 'test')).err).toContain('--product is required')
     const trial = harness()

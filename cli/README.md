@@ -14,6 +14,35 @@ keygrant --help
 
 Node.js 22 or later.
 
+## A single file
+
+From 0.5.0 each release also has the command as one file for each platform, with nothing to install, not
+even Node.js: Linux (x64 and arm64, glibc 2.28 or later, so not Alpine), macOS (Apple silicon and Intel)
+and Windows (x64), on the release page of
+[keygrantdev/keygrant-cli](https://github.com/keygrantdev/keygrant-cli/releases). Download the one for your
+machine and its `.sha256`, check one against the other, and put the file on your PATH as `keygrant`:
+
+```sh
+# Linux (the file for 0.5.0 on x64; use the version and machine you downloaded)
+sha256sum -c keygrant-0.5.0-linux-x64.sha256
+mkdir -p ~/.local/bin && install -m 755 keygrant-0.5.0-linux-x64 ~/.local/bin/keygrant
+
+# macOS
+shasum -a 256 -c keygrant-0.5.0-macos-arm64.sha256
+mkdir -p ~/.local/bin && install -m 755 keygrant-0.5.0-macos-arm64 ~/.local/bin/keygrant
+```
+
+`~/.local/bin` must be on your PATH (add `export PATH="$HOME/.local/bin:$PATH"` to your shell's profile if
+it is not); any other folder on your PATH works as well.
+
+On Windows, compare `Get-FileHash keygrant-0.5.0-windows-x64.exe` with the `.sha256`, rename the file to
+`keygrant.exe` and put it in a folder on your PATH.
+
+It does everything the npm package does but keep a key: it carries no credential store, so set
+`KEYGRANT_API_KEY`, as a build pipeline does (`keygrant login` says so). The macOS file is signed ad hoc,
+not notarized: if macOS stops it the first time, `xattr -d com.apple.quarantine <file>` lets it run. The
+Windows file is not signed, so Windows may ask before running it.
+
 ## Signing in
 
 The command uses one of your account's secret API keys (`kg_live_...` or `kg_test_...`, from the
@@ -43,13 +72,15 @@ only; a release needs a `kg_live_` key.
 | `keygrant licenses versions <key> --min <n> --max <n\|none>` | Set the major versions it covers |
 | `keygrant licenses device-limit <key> <n>` | Set how many devices it may be active on |
 | `keygrant licenses seat-release <key> <days\|off>` | Set how many days an unused device keeps its seat before it is freed, or `off` |
+| `keygrant licenses user-lock <key> <off\|email\|code>` | Set who can activate a new device on it: anyone with the key, or only the buyer |
 | `keygrant licenses file <key> [--out <path>] [--force] [--resign]` | Save the key's license file or key file (a `.kglicense`), for a license model that delivers a file |
 | `keygrant licenses meters <key>` | What the license counts: each meter's uses left, total, used, offline allowance and period |
-| `keygrant licenses uses <key> <meter> --add <n>` (or `--set <n>`, `--offline <n\|default>`, `--reset`) | Add uses to a meter, set its uses or its offline allowance, or start a new period |
+| `keygrant licenses uses <key> <meter> --add <n>` (or `--set <n>`, `--offline <n\|default>`, `--resets <never\|period>`, `--reset`, `--remove`) | Add uses to a meter, set its uses, its offline allowance or whether it comes back each period, start a new period, or take it off the key |
 | `keygrant licenses use <key> <meter> [n] [--id <id>]` | Spend a meter from your backend |
 | `keygrant licenses revoke <key> [--reason <reason>]` | Revoke it |
-| `keygrant licenses free-device <key> <activation id>` | Free one device |
-| `keygrant licenses test --product <id> --scenario <state>` | A test license: `valid`, `trial-ending`, `expired`, `revoked` or `device-limit` |
+| `keygrant licenses devices <key>` | The devices it is active on, with each one's activation id |
+| `keygrant licenses free-device <key> <activation id>` | Free one device (`licenses devices` lists the ids) |
+| `keygrant licenses test --product <id> --scenario <state>` | A test license: `valid`, `trial-ending`, `expired`, `revoked`, `device-limit` or `used-up` |
 | `keygrant release <version> --product <id>` | Tell KeyGrant you shipped a version |
 | `keygrant pubkey <product id>` | The product's public key set, the JSON your app embeds |
 | `keygrant verify <lease \| license file> --key <file>` | Verify a lease, a license file or a key file against a key set, with no network |
@@ -98,12 +129,19 @@ spends its own meters through the SDK; the command line is for you.
   1,000`, `renders 50 a period`) and the uses a top-up adds (`+500 exports`).
 - `keygrant licenses uses <key> <meter>` changes one meter with exactly one of `--add <n>` (more uses on
   top of the key's own, a top-up by hand), `--set <n>` (the key's own uses; a meter the key lacks but its
-  product has is added), `--offline <n|default>` (the most a device may spend with no answer from KeyGrant)
-  and `--reset` (a new period now, on a meter that comes back each billing period). `--add` and `--reset`
+  product has is added), `--offline <n|default>` (the most a device may spend with no answer from KeyGrant),
+  `--resets <never|period>` (used up for good, or back each billing period on a subscription key), `--reset`
+  (a new period now, on a meter that comes back each billing period) and `--remove` (the meter off the key,
+  discarding the uses added on top and the count of what was spent; adding it back starts it unused,
+  offline spends a device reports while the meter is off the key are not counted, and the app's `use()` of
+  it is then refused as `no-meter`). `--add` and `--reset`
   send an idempotency key, one made for each run or yours with `--idempotency-key`, so running the same
   command again with the same key changes nothing more; when one of them fails in a way that may have gone
-  through all the same (exit 5), the error names the key it made. A set is its own retry. The app sees a
-  change at its next check-in.
+  through all the same (exit 5), the error names the key it made. A set is its own retry; a removal run again
+  answers `unknown-meter`, the meter being gone already. The app sees a change at its next check-in.
+- `keygrant licenses issue --meter <code=uses,...>` gives the new key meters of its own in place of its
+  model's, one `--meter` each: the uses, then any of `period`, `never` and `offline=<n|default>`
+  (`--meter renders=50,period,offline=5`); `--no-meters` gives it none.
 - `keygrant licenses use <key> <meter> [n]` spends `n` uses (1 by default) from your own backend, a cloud
   render the key pays for: your secret key is the proof, so no device is asked. It is exact and whole or
   none: when fewer than `n` are left it exits 1 with `used-up` and how many are. `--id` is the spend's id
@@ -111,6 +149,29 @@ spends its own meters through the SDK; the command line is for you.
   answers as the first spend did and spends nothing more, and an error that may have spent all the same
   (exit 5) names the id it made. It prints the spend's id, which `--json` does not.
 - `keygrant verify` prints a lease's meters, what was left of each when the lease was signed.
+- `keygrant licenses test --scenario used-up` makes a test license whose first meter has no uses left, from
+  the product's first model that issues keys, is not archived and counts uses (or `--model`); a model that
+  counts nothing is `no-meters`.
+
+## Who can activate
+
+A license model can lock its keys to the buyer, known by the email on the key: `email` asks a new device for
+that email, and `code` also for a six-digit code KeyGrant emails to it. Only a new device is ever asked:
+devices already activated keep working, offline too. Your app sends the email and the code when it
+activates, `activate(key, { email, code })` in `@keygrant/electron` 0.7.0 and later, the same in each other
+KeyGrant SDK's own form from 0.6.0.
+
+- `keygrant licenses get` shows who can activate a key, and says when its lock is never asked: a test
+  license, or a key with no email, activates as anyone's. `keygrant products` adds a column saying who can
+  activate each model's keys, when any of the product's models locks them.
+- `keygrant licenses user-lock <key> <off|email|code>` sets it for one key, in place of its model's. A key
+  with no email (`email-required`), a test license (`user-lock-test-key`) and a key sent as an offline
+  license file (`user-lock-license-file`) cannot be locked; `off` is always allowed. Issuing a live key
+  under a model that locks needs `--email`.
+- KeyGrant emails no code for a product that sends its own customer email: a new device on a `code` key is
+  told `try-again` and cannot activate, so use `email` there, or let KeyGrant send the product's email. A
+  key file carries the buyer's email, so whoever has the file has it: where KeyGrant sends the product's
+  email, use `code` for a key sent as a key file.
 
 ## License files and key files
 

@@ -4,6 +4,7 @@ import { emit, positionals, segment, type Command } from '../command.js'
 import { CliError, EXIT, refusedLocally } from '../errors.js'
 import { when } from '../output.js'
 import { licenseBlock, type License } from './license-view.js'
+import { metersOf } from './meter-options.js'
 
 const DAY_MS = 86_400_000
 const TYPES = ['perpetual', 'subscription', 'trial', 'timed']
@@ -136,6 +137,8 @@ function issueBody(args: Parsed): Record<string, unknown> {
   if (expires !== undefined) body.expiresAt = instant(expires, '--expires', true)
   const entitlements = entitlementsOf(args)
   if (entitlements !== undefined) body.entitlements = entitlements
+  const meters = metersOf(args)
+  if (meters !== undefined) body.meters = meters
   const count = value(args, 'count')
   if (count !== undefined) body.count = wholeNumber(count, '--count', 1, 100)
   if (args.flags.has('send-email')) body.sendEmail = true
@@ -150,7 +153,8 @@ export const issue: Command = {
   --product <id>              the product's API ID
   --model <model id>          the license model sold (its terms: expiry, devices, entitlements, versions)
   --type <type>               perpetual, subscription, trial or timed, for a key sold under no model
-  --email <address>           the customer's address
+  --email <address>           the customer's address (required by a model that sends a file or locks
+                              who can activate, unless the key is a test license)
   --send-email                email the key with the product's delivery mail
   --device-limit <n>          1 to 1,000, in place of the model's
   --seat-release-days <n|off> days, 1 to 365, an unused device keeps its seat before it is freed,
@@ -163,6 +167,11 @@ export const issue: Command = {
   --entitlement <code=value>  what it grants, in place of the model's (repeat for each; true, false,
                               a number, or text)
   --no-entitlements           grant none, whatever the model grants
+  --meter <code=uses,...>     what it counts, in place of the model's (repeat for each meter): the uses,
+                              0 to 1,000,000,000, then any of period (back each billing period, on a
+                              subscription key), never, and offline=<n|default> (a device's offline
+                              allowance): renders=50,period,offline=5
+  --no-meters                 count nothing, whatever the model counts
   --count <n>                 1 to 100 keys, as one sale
   --idempotency-key <key>     the same key on a retry answers the key first issued (one is made for
                               each run otherwise)
@@ -184,6 +193,8 @@ Prints each key on a line of its own. --json prints the API's answer, { "key", "
     'upgrade-months': { type: 'value' },
     entitlement: { type: 'value', many: true },
     'no-entitlements': { type: 'flag' },
+    meter: { type: 'value', many: true },
+    'no-meters': { type: 'flag' },
     count: { type: 'value' },
     'idempotency-key': { type: 'value' },
   },
@@ -302,6 +313,39 @@ A device already unseen that long is freed the next night. Prints the license as
   },
 }
 
+/** Who can activate a new device on a key, as the worker names the choices (its USER_LOCKS; the contract test holds the two together). */
+export const USER_LOCKS: readonly string[] = ['off', 'email', 'code']
+
+export const userLock: Command = {
+  name: 'licenses user-lock',
+  summary: 'Set who can activate a new device on a license.',
+  help: `keygrant licenses user-lock <key> <off|email|code>
+
+  off     anyone with the key
+  email   only the buyer: a new device must name the email the key was sold to
+  code    only the buyer: a new device names the email, then gives a code KeyGrant emails to it
+
+For this key alone, in place of its model's. Only a new device is ever asked: devices already
+activated keep working, and so do renewals and the app offline. The app must send the email (and
+the code) when it activates: activate(key, { email, code }) in @keygrant/electron 0.7.0 and later,
+the same in each other KeyGrant SDK's own form from 0.6.0. A key with no email (email-required),
+a test license (user-lock-test-key) and a key sent as an offline license file
+(user-lock-license-file) cannot be locked; off is always allowed.
+
+KeyGrant emails no code for a product that sends its own customer email: a new device on a code
+key is told try-again and cannot activate, so use email there, or let KeyGrant send the product's
+email. A key file carries the buyer's email, so whoever has the file has it: where KeyGrant sends
+the product's email, use code for a key sent as a key file. Prints the license as it now stands; --json prints the API's answer.`,
+  options: {},
+  async run(ctx, args) {
+    const [licenseKey, given] = positionals(args, 'the license key', 'who can activate (off, email or code)')
+    const lock = (given as string).trim().toLowerCase()
+    if (!USER_LOCKS.includes(lock)) throw usage(`who can activate must be off, email or code, not "${given as string}"`)
+    const answer = await request(ctx, 'POST', `/v1/licenses/${segment(licenseKey as string)}/user-lock`, { key: await secretKey(ctx), body: { userLock: lock }, expect: answers.license })
+    emit(ctx, answer, () => licenseBlock(answer.license as License, ctx.deps.now()))
+  },
+}
+
 export const revoke: Command = {
   name: 'licenses revoke',
   summary: 'Revoke a license.',
@@ -327,8 +371,8 @@ export const freeDevice: Command = {
   summary: 'Free one device from a license, by its activation id.',
   help: `keygrant licenses free-device <key> <activation id>
 
-Frees the seat so another device can take it. The activation id is the SDK's, and the
-device.activated webhook's. --json prints the API's answer, { "released": 0 | 1 }.`,
+Frees the seat so another device can take it. The activation id is the one keygrant licenses
+devices <key> lists, the SDK's, and the device.activated webhook's. --json prints the API's answer, { "released": 0 | 1 }.`,
   options: {},
   async run(ctx, args) {
     const [licenseKey, given] = positionals(args, 'the license key', 'the activation id')

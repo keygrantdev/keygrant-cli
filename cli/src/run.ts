@@ -3,15 +3,15 @@ import { apiOrigin, type Context } from './api.js'
 import type { Command } from './command.js'
 import type { Deps } from './deps.js'
 import { CliError, EXIT, type ExitCode } from './errors.js'
-import { asJson } from './output.js'
+import { asJson, printableLines } from './output.js'
 import { VERSION } from './version.js'
 import { login, logout } from './commands/auth.js'
 import { products, release, testLicense } from './commands/catalog.js'
 import { pubkey, verify } from './commands/keys.js'
-import { checkout, get, list } from './commands/licenses-read.js'
+import { checkout, devices, get, list } from './commands/licenses-read.js'
 import { licenseFile } from './commands/licenses-file.js'
 import { meters, use, uses } from './commands/licenses-meters.js'
-import { deviceLimit, extend, freeDevice, issue, revoke, seatRelease, versions } from './commands/licenses-write.js'
+import { deviceLimit, extend, freeDevice, issue, revoke, seatRelease, userLock, versions } from './commands/licenses-write.js'
 
 /** Every command, in the order the help lists them. */
 export const COMMANDS: readonly Command[] = [
@@ -27,10 +27,12 @@ export const COMMANDS: readonly Command[] = [
   versions,
   deviceLimit,
   seatRelease,
+  userLock,
   meters,
   uses,
   use,
   revoke,
+  devices,
   freeDevice,
   testLicense,
   release,
@@ -164,6 +166,7 @@ function say(deps: Deps, text: string): ExitCode {
 
 function fail(deps: Deps, json: boolean, error: CliError, command?: Command): ExitCode {
   if (json) deps.err(asJson(error.json))
-  else deps.err(`keygrant: ${error.message}${error.exit === EXIT.usage && command ? `\nRun \`keygrant ${command.name} --help\`.` : ''}`)
+  // An error can carry what a server or a file said: people see it printable.
+  else deps.err(`keygrant: ${printableLines(error.message)}${error.exit === EXIT.usage && command ? `\nRun \`keygrant ${command.name} --help\`.` : ''}`)
   return error.exit
 }
