@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- The single files on the GitHub release are signed: the macOS ones with a Developer ID and notarized by Apple,
+  the Windows one with Authenticode. Each release after 0.5.0 says in its notes how its own files are signed.
+  The command itself is unchanged.
+
 ## 0.5.0
 
 - The command as one file for each platform (Linux x64 and arm64 with glibc 2.28 or later, so not Alpine, macOS on Apple silicon

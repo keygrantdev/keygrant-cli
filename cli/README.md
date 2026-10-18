@@ -39,9 +39,9 @@ On Windows, compare `Get-FileHash keygrant-0.5.0-windows-x64.exe` with the `.sha
 `keygrant.exe` and put it in a folder on your PATH.
 
 It does everything the npm package does but keep a key: it carries no credential store, so set
-`KEYGRANT_API_KEY`, as a build pipeline does (`keygrant login` says so). The macOS file is signed ad hoc,
-not notarized: if macOS stops it the first time, `xattr -d com.apple.quarantine <file>` lets it run. The
-Windows file is not signed, so Windows may ask before running it.
+`KEYGRANT_API_KEY`, as a build pipeline does (`keygrant login` says so). Each release after 0.5.0 says in its
+notes whether its macOS files are notarized and its Windows file signed. 0.5.0's are neither: if macOS stops
+the file the first time, `xattr -d com.apple.quarantine <file>` lets it run, and Windows may ask before running it.
 
 ## Signing in
 

@@ -2,9 +2,11 @@ name: publish
 
 # A version tag (0.1.0, no "v") builds and checks @keygrant/cli, then publishes that build to npm
 # through npm's trusted publishing: no npm token is stored anywhere, and the package carries provenance.
-# It also builds the command as one file per platform and attaches the files to the tag's GitHub release.
+# It also builds the command as one file per platform, signs the macOS and Windows ones once their repository
+# variables are set (APPLE_TEAM_ID, AZURE_CLIENT_ID), and attaches the files to the tag's GitHub release.
 # The build job, which installs dependencies, cannot request an identity token; the publish job, which can,
-# runs no package code. A version already on npm is skipped.
+# runs no package code. The Windows signing job can too, to sign in to Azure, and runs Azure's signing tools
+# alone. A version already on npm is skipped.
 
 # Run by hand from the Actions tab, from the tag itself (Use workflow from: the tag), it publishes that tag
 # the same way: the rescue for a tag whose push started no run. Never from a branch: the package's provenance
@@ -201,20 +203,241 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  release-binaries:
+  # Signing, on once the owner has given each side its credentials (docs: "Signing the single files" in the
+  # publishing guide): macOS by the repository variable APPLE_TEAM_ID, Windows by AZURE_CLIENT_ID. The secrets live in
+  # the environment `signing` alone. No signing job checks out or installs anything: sign-macos signs and notarizes the
+  # file the build made and check-macos, holding no secret, runs it and writes its checksum; sign-windows signs, checks
+  # and hashes. Once a side is on, the release attaches its platforms' signed files or none of them, never an unsigned
+  # one in their place.
+  sign-macos:
     needs: [build, binaries]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.binaries.result != 'skipped' && vars.APPLE_TEAM_ID != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+          - runner: macos-15-intel
+            platform: macos-x64
+    runs-on: ${{ matrix.runner }}
+    environment: signing
+    timeout-minutes: 45
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binary-${{ matrix.platform }}
+          path: in
+      - name: Sign with the Developer ID and notarize
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+          DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+        run: |
+          file="in/keygrant-$TAG-$PLATFORM"
+          [ -f "$file" ] || { echo "::error::No $PLATFORM file from the build to sign."; exit 1; }
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          # The keychain and the key go whatever happens, before anything else runs in this job.
+          trap 'security delete-keychain "$keychain" > /dev/null 2>&1 || true; rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary.p8"' EXIT
+          keychain_password=$(openssl rand -hex 24)
+          printf '%s' "$DEVELOPER_ID_P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign > /dev/null
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep "Developer ID Application" | grep "($APPLE_TEAM_ID)" | head -1 | awk '{print $2}')
+          [ -n "$identity" ] || { echo "::error::The certificate holds no Developer ID Application identity of team $APPLE_TEAM_ID."; exit 1; }
+          # V8 compiles as it runs: the hardened runtime that notarization requires refuses that without allow-jit.
+          cat > "$RUNNER_TEMP/entitlements.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.allow-jit</key>
+            <true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+          codesign --force --sign "$identity" --keychain "$keychain" --options runtime --timestamp --entitlements "$RUNNER_TEMP/entitlements.plist" "$file"
+          codesign --verify --strict --verbose=2 "$file"
+          details=$(codesign -dv "$file" 2>&1)
+          printf '%s\n' "$details" | grep -q "TeamIdentifier=$APPLE_TEAM_ID" || { echo "::error::The signature names another team."; exit 1; }
+          printf '%s\n' "$details" | grep -q "flags=.*runtime" || { echo "::error::The signature has no hardened runtime."; exit 1; }
+          printf '%s\n' "$NOTARY_KEY_P8" > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --keepParent "$file" "$RUNNER_TEMP/notarize.zip"
+          # Its answer is read whatever it exits with, so a refusal still fetches Apple's log below.
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" --wait --timeout 30m --output-format json > "$RUNNER_TEMP/notary.json" || true
+          status=$(jq -r .status "$RUNNER_TEMP/notary.json" 2> /dev/null || true)
+          if [ "$status" != Accepted ]; then
+            echo "::error::Apple's notary service answered $status."
+            xcrun notarytool log "$(jq -r .id "$RUNNER_TEMP/notary.json")" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" || true
+            exit 1
+          fi
+          echo "Apple's notary service accepted submission $(jq -r .id "$RUNNER_TEMP/notary.json") for $PLATFORM."
+          mkdir notarized
+          mv "$file" notarized/
+      # The signed file is never run here, where the signing secrets are: check-macos runs it, holding none.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notarized-${{ matrix.platform }}
+          path: notarized/*
+          if-no-files-found: error
+          retention-days: 7
+
+  check-macos:
+    needs: sign-macos
+    # The signed file runs here, in a job with no environment and no secret: the hardened runtime decides whether it
+    # starts, and nothing it starts can reach the signing credentials.
+    if: ${{ !cancelled() && needs.sign-macos.result != 'skipped' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+          - runner: macos-15-intel
+            platform: macos-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notarized-${{ matrix.platform }}
+          path: in
+      - name: Check the signed file runs, and write its checksum
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          name="keygrant-$TAG-$PLATFORM"
+          # An artifact keeps no file mode: the file comes back not executable.
+          chmod +x "in/$name"
+          said=$("in/$name" --version)
+          [ "$said" = "$TAG" ] || { echo "::error::The signed file says $said, not $TAG."; exit 1; }
+          mkdir signed
+          mv "in/$name" "signed/$name"
+          (cd signed && shasum -a 256 "$name" > "$name.sha256")
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-${{ matrix.platform }}
+          path: signed/*
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-windows:
+    needs: [build, binaries]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.binaries.result != 'skipped' && vars.AZURE_CLIENT_ID != '' }}
+    runs-on: windows-2025
+    environment: signing
+    timeout-minutes: 20
+    # The identity token signs in to Azure by federation (no stored Azure secret). Any step here could mint one, so
+    # nothing here runs the file: signing a Windows file does not change what it does.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binary-windows-x64
+          path: in
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\in
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: KeyGrant CLI
+          description-url: https://keygrant.dev/docs/cli
+          # Nothing from a cache reaches a job that can mint an identity token.
+          cache-dependencies: false
+          # Only the Azure CLI sign-in above: a runner probing the others can stall on them.
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Check the signature, and write the checksum
+        shell: pwsh
+        run: |
+          $name = "keygrant-$env:TAG-windows-x64.exe"
+          $signature = Get-AuthenticodeSignature "in/$name"
+          if ($signature.Status -ne 'Valid') { Write-Output "::error::The file's signature is $($signature.Status)."; exit 1 }
+          Write-Output "Signed by $($signature.SignerCertificate.Subject), timestamped $($null -ne $signature.TimeStamperCertificate)"
+          New-Item -ItemType Directory signed | Out-Null
+          Move-Item "in/$name" "signed/$name"
+          $hash = (Get-FileHash -Algorithm SHA256 "signed/$name").Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("signed/$name.sha256", "$hash  $name`n")
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-windows-x64
+          path: signed/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release-binaries:
+    needs: [build, binaries, sign-macos, check-macos, sign-windows]
     # Whatever platforms built, once the build job accepted the tag; a refused tag attaches nothing.
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.binaries.result != 'skipped' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
+    # What the sign jobs did, not the variables read again: a variable changed mid-run cannot pair a side's gate
+    # with the other answer.
+    env:
+      MACOS_SIGNED: ${{ needs.sign-macos.result != 'skipped' }}
+      WINDOWS_SIGNED: ${{ needs.sign-windows.result != 'skipped' }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: binary-*
           merge-multiple: true
-          path: out
+          path: built
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: signed-*
+          merge-multiple: true
+          path: signed
+      - name: Choose each platform's files
+        run: |
+          # A platform whose side signs gets its signed files or none; the others get the files the build made.
+          mkdir -p out built signed
+          missing=""
+          for platform in linux-x64 linux-arm64 macos-arm64 macos-x64 windows-x64; do
+            case "$platform" in
+              macos-*) from=$([ "$MACOS_SIGNED" = true ] && echo signed || echo built) ;;
+              windows-*) from=$([ "$WINDOWS_SIGNED" = true ] && echo signed || echo built) ;;
+              *) from=built ;;
+            esac
+            if ls "$from/keygrant-$TAG-$platform"* > /dev/null 2>&1; then
+              cp "$from/keygrant-$TAG-$platform"* out/
+            elif [ "$from" = signed ]; then
+              echo "::error::$platform is signed, and its signed file did not come: it is not attached."
+              missing="$missing $platform"
+            fi
+          done
+          echo "UNSIGNED_MISSING=$missing" >> "$GITHUB_ENV"
       - name: Check the files
         working-directory: out
         run: |
@@ -232,6 +455,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DIST_TAG: ${{ needs.build.outputs.dist-tag }}
         run: |
+          if [ "$MACOS_SIGNED" = true ]; then
+            macos="The macOS files are signed with a Developer ID and notarized by Apple."
+          else
+            macos="The macOS files are not notarized: if macOS stops one the first time, \`xattr -d com.apple.quarantine <file>\` lets it run."
+          fi
+          if [ "$WINDOWS_SIGNED" = true ]; then
+            windows="The Windows file is Authenticode-signed."
+          else
+            windows="The Windows file is not signed, so Windows may ask before running it."
+          fi
           cat > notes.md <<EOF
           The \`keygrant\` command as one file for each platform: no Node.js needed. Download the one for your
           machine, check it against its \`.sha256\`, make it executable (\`chmod +x\`) and put it on your PATH. The
@@ -240,7 +473,7 @@ jobs:
           It keeps no key: set \`KEYGRANT_API_KEY\`. To keep a key with \`keygrant login\`, use the npm package,
           \`npm install --global @keygrant/cli@$TAG\`.
 
-          macOS may stop a downloaded file the first time; \`xattr -d com.apple.quarantine <file>\` lets it run.
+          $macos $windows
           EOF
           # A file already on the release is never replaced: a release keeps the files it was first given. A
           # platform's file and its .sha256 go up together or not at all, so a checksum always names its own file.
@@ -276,3 +509,8 @@ jobs:
           for platform in linux-x64 linux-arm64 macos-arm64 macos-x64 windows-x64; do
             ls out/keygrant-*-"$platform"* > /dev/null 2>&1 || echo "::warning::No file for $platform in this release."
           done
+          # A signed platform whose signed file never came fails the run, after the others are attached.
+          if [ -n "$UNSIGNED_MISSING" ]; then
+            echo "::error::Signed files missing:$UNSIGNED_MISSING."
+            exit 1
+          fi

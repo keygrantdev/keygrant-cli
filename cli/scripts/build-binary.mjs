@@ -8,8 +8,9 @@
  * the credential store's native module cannot be loaded from inside one, so the binary keeps no key and every
  * command reads KEYGRANT_API_KEY. The script is injected into a copy of the Node.js running this build (so build
  * with the Node.js 22 the package runs on), then the copy is checked: its version, its help, a lease verified offline,
- * and that it says it keeps no key. On macOS the copy is signed ad hoc, which Apple silicon needs to run it at all; it is not notarized,
- * and the Windows one is not signed.
+ * and that it says it keeps no key. On macOS the copy is signed ad hoc, which Apple silicon needs to run it at all. A release's
+ * files are signed properly, where at all, by the publish workflow's signing jobs: Developer ID and notarized on macOS,
+ * Authenticode on Windows.
  *
  *   node scripts/build-binary.mjs
  */
