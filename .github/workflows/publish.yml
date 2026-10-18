@@ -465,6 +465,19 @@ jobs:
           else
             windows="The Windows file is not signed, so Windows may ask before running it."
           fi
+          # A signed platform whose signed file never came is not attached: the notes say it is missing, never that it
+          # is signed.
+          macos_missing=""
+          for platform in $UNSIGNED_MISSING; do
+            case "$platform" in
+              windows-*) windows="This release has no Windows file." ;;
+              macos-*) macos_missing="$macos_missing $platform" ;;
+            esac
+          done
+          case "$macos_missing" in
+            " macos-arm64 macos-x64") macos="This release has no macOS files." ;;
+            " "*) macos="$macos This release has no${macos_missing} file." ;;
+          esac
           cat > notes.md <<EOF
           The \`keygrant\` command as one file for each platform: no Node.js needed. Download the one for your
           machine, check it against its \`.sha256\`, make it executable (\`chmod +x\`) and put it on your PATH. The

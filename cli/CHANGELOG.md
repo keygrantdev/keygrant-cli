@@ -1,10 +1,17 @@
 # Changelog
 
+## 0.5.2
+
+- The Windows file on the GitHub release is signed with Authenticode. 0.5.1's could not be signed: its build
+  injected the command into a copy of Node.js without first taking Node.js's own signature off, and the
+  injection corrupted it. So 0.5.1's release has no Windows file. A release's notes now say when a signed
+  platform has no file. The command itself is unchanged.
+
 ## 0.5.1
 
-- The single files on the GitHub release are signed: the macOS ones with a Developer ID and notarized by Apple,
-  the Windows one with Authenticode. Each release after 0.5.0 says in its notes how its own files are signed.
-  The command itself is unchanged.
+- The macOS files on the GitHub release are signed with a Developer ID and notarized by Apple. The Windows file
+  could not be signed, so this release has none (0.5.2 has it). Each release after 0.5.0 says in its notes how
+  its own files are signed. The command itself is unchanged.
 
 ## 0.5.0
 

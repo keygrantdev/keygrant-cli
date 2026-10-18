@@ -21,6 +21,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripAuthenticode } from './strip-authenticode.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const out = join(root, 'dist-binary')
@@ -98,7 +99,10 @@ try {
   execFileSync(process.execPath, ['--experimental-sea-config', config], { stdio: 'inherit' })
   copyFileSync(process.execPath, binary)
   chmodSync(binary, 0o755)
+  // Node.js's own signature comes off first (Node's documentation), or the injection corrupts it and no signing tool
+  // can sign the file after.
   if (process.platform === 'darwin') execFileSync('codesign', ['--remove-signature', binary], { stdio: 'inherit' })
+  if (process.platform === 'win32') writeFileSync(binary, stripAuthenticode(readFileSync(binary)))
   await inject(binary, 'NODE_SEA_BLOB', readFileSync(blob), { sentinelFuse: SEA_FUSE, ...(process.platform === 'darwin' ? { machoSegmentName: 'NODE_SEA' } : {}) })
   if (process.platform === 'darwin') execFileSync('codesign', ['--sign', '-', binary], { stdio: 'inherit' })
   check()
