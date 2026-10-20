@@ -35,6 +35,8 @@ interface Product {
   keyPrefix: string
   currentMajor: number
   archived: boolean
+  /** Whether its apps may restore a buyer's keys by an emailed code (key pickup); absent from a KeyGrant that predates it. */
+  keyPickup?: boolean
   /** The meters its apps spend; absent from a KeyGrant that predates meters. */
   meters?: ProductMeter[]
   models: Model[]
@@ -91,7 +93,7 @@ with --product only that product in it.`,
       return shown
         .map((p) => {
           const catalog = productMetersText(p.meters)
-          const head = `${p.slug}  ${p.name}  (keys ${p.keyPrefix}-..., current version ${p.currentMajor}${p.archived ? ', archived' : ''})${catalog ? `\n  meters: ${catalog}` : ''}`
+          const head = `${p.slug}  ${p.name}  (keys ${p.keyPrefix}-..., current version ${p.currentMajor}${p.keyPickup ? ', key pickup on' : ''}${p.archived ? ', archived' : ''})${catalog ? `\n  meters: ${catalog}` : ''}`
           if (!p.models.length) return `${head}\n  no license models`
           // The column is there when a model of the product counts uses, so a product without meters prints as it did.
           const metered = p.models.some((m) => modelMetersText(m.meters, m.addsUses) !== '')

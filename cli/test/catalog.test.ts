@@ -60,6 +60,29 @@ describe('keygrant products', () => {
     )
   })
 
+  it('says when a product has key pickup on, and nothing when it is off or the KeyGrant does not say', async () => {
+    const products = {
+      products: [
+        { slug: 'uv', name: 'Ultraviolet', keyPrefix: 'UV', currentMajor: 1, archived: false, keyPickup: true, models: [] },
+        { slug: 'off', name: 'Off', keyPrefix: 'OFF', currentMajor: 1, archived: true, keyPickup: false, models: [] },
+        { slug: 'old', name: 'Old', keyPrefix: 'OLD', currentMajor: 1, archived: false, models: [] },
+      ],
+    }
+    const res = await harness({ answers: [{ status: 200, body: products }] }).run('products')
+    expect(res.out).toBe(
+      [
+        'uv  Ultraviolet  (keys UV-..., current version 1, key pickup on)',
+        '  no license models',
+        '',
+        'off  Off  (keys OFF-..., current version 1, archived)',
+        '  no license models',
+        '',
+        'old  Old  (keys OLD-..., current version 1)',
+        '  no license models',
+      ].join('\n'),
+    )
+  })
+
   it('says after what a model sells when its keys are sent as a file, and nothing for a typed key or an upgrade', async () => {
     const files = {
       products: [

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.3
+
+- `keygrant products` says "key pickup on" beside a product whose apps may restore a buyer's keys by an emailed
+  code (key pickup); a product with it off prints as before.
+
 ## 0.5.2
 
 - The Windows file on the GitHub release is signed with Authenticode. 0.5.1's could not be signed: its build
