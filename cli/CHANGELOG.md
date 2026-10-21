@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.4
+
+- `keygrant licenses checkout` takes a Paddle transaction id (`txn_...`) as well as a Stripe Checkout
+  Session id (`cs_...`), and prints the license that sale issued.
+
 ## 0.5.3
 
 - `keygrant products` says "key pickup on" beside a product whose apps may restore a buyer's keys by an emailed

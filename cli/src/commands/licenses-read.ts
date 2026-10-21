@@ -123,15 +123,15 @@ a nextCursor of null.`,
 
 export const checkout: Command = {
   name: 'licenses checkout',
-  summary: 'Show the license a Stripe checkout made, by its session id.',
-  help: `keygrant licenses checkout <cs_...>
+  summary: 'Show the license a checkout made, by its Stripe session id or Paddle transaction id.',
+  help: `keygrant licenses checkout <cs_... or txn_...>
 
-Prints the license a Stripe Checkout Session minted (every key, for a sale of several),
+Prints the license a Stripe Checkout Session or a Paddle transaction minted (every key, for a sale of several),
 or why there is none: not yet (the webhook that makes it can take a few seconds), or a
 checkout that upgraded a key, was held, or was refunded. --json prints the API's answer.`,
   options: {},
   async run(ctx, args) {
-    const [session] = positionals(args, 'the Checkout Session id (cs_...)')
+    const [session] = positionals(args, 'the checkout id (cs_... or txn_...)')
     const body = await request(ctx, 'GET', `/v1/checkouts/${segment(session as string)}/license`, { key: await secretKey(ctx), expect: answers.checkout })
     emit(ctx, body, () => {
       const all = (body.licenses as License[] | undefined) ?? [body.license as License]

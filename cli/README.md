@@ -67,7 +67,7 @@ only; a release needs a `kg_live_` key.
 | `keygrant licenses issue --product <id> --model <model id>` | Issue a key (`--count` for several, as one sale) |
 | `keygrant licenses get <key>` | One license |
 | `keygrant licenses list [--product] [--email] [--status] [--all]` | Licenses, newest first |
-| `keygrant licenses checkout <cs_...>` | The license a Stripe checkout made |
+| `keygrant licenses checkout <cs_... or txn_...>` | The license a checkout made (a Stripe session or a Paddle transaction) |
 | `keygrant licenses extend <key> --to <date>` or `--days <n>` | Move its expiry later |
 | `keygrant licenses versions <key> --min <n> --max <n\|none>` | Set the major versions it covers |
 | `keygrant licenses device-limit <key> <n>` | Set how many devices it may be active on |
